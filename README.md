@@ -20,7 +20,7 @@ A terminal user interface (TUI) for managing Arch Linux system updates, installe
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/upkeep.git
+git clone https://github.com/jakeb-grant/upkeep.git
 cd upkeep
 cargo build --release
 sudo cp target/release/upkeep /usr/local/bin/
