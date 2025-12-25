@@ -1,0 +1,21 @@
+# Rust
+/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local development
+*.log
+.env
+
+# Development notes
+/PLAN.md
+/.claude/
