@@ -1,6 +1,7 @@
 mod styles;
 
 use crate::app::{App, LoadingState, Tab};
+use crate::updates::PackageInfo;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::Style,
@@ -53,6 +54,91 @@ fn draw_filter_bar(frame: &mut Frame, filter_text: &str, filter_mode: bool, matc
     frame.render_widget(filter_bar, area);
 }
 
+fn draw_info_pane(frame: &mut Frame, info: Option<&PackageInfo>, area: Rect) {
+    let content = if let Some(info) = info {
+        // Line 1: name version (repository)
+        let repo_display = if info.repository.is_empty() {
+            String::new()
+        } else {
+            format!("({})", info.repository)
+        };
+        let line1 = Line::from(vec![
+            Span::styled(&info.name, styles::title_active()),
+            Span::raw(" "),
+            Span::styled(&info.version, styles::status_active()),
+            Span::raw(" "),
+            Span::styled(repo_display, styles::disabled()),
+        ]);
+
+        // Line 2: description (truncated if needed)
+        let line2 = Line::from(Span::raw(&info.description));
+
+        // Line 3: size + install info
+        let install_info = match (&info.install_date, &info.install_reason) {
+            (Some(date), Some(reason)) => format!(" | {} | {}", date, reason),
+            (Some(date), None) => format!(" | {}", date),
+            _ => String::new(),
+        };
+        let line3 = Line::from(vec![
+            Span::styled("Size: ", styles::disabled()),
+            Span::styled(&info.size, styles::status_active()),
+            Span::styled(install_info, styles::disabled()),
+        ]);
+
+        // Line 4: URL
+        let line4 = if let Some(url) = &info.url {
+            Line::from(vec![
+                Span::styled("URL: ", styles::disabled()),
+                Span::styled(url.as_str(), styles::status_active()),
+            ])
+        } else {
+            Line::from(Span::styled("URL: ", styles::disabled()))
+        };
+
+        // Line 5: Built date
+        let line5 = if let Some(build_date) = &info.build_date {
+            Line::from(vec![
+                Span::styled("Built: ", styles::disabled()),
+                Span::styled(build_date.as_str(), styles::status_active()),
+            ])
+        } else {
+            Line::from(Span::styled("Built: ", styles::disabled()))
+        };
+
+        // Line 6: Maintainer + Votes (AUR only)
+        let mut line6_spans = Vec::new();
+        if let Some(maintainer) = &info.maintainer {
+            line6_spans.push(Span::styled("Maintainer: ", styles::disabled()));
+            line6_spans.push(Span::styled(maintainer.as_str(), styles::status_active()));
+        }
+        if let Some(votes) = &info.votes {
+            if !line6_spans.is_empty() {
+                line6_spans.push(Span::styled(" | ", styles::disabled()));
+            }
+            line6_spans.push(Span::styled("Votes: ", styles::disabled()));
+            line6_spans.push(Span::styled(votes.to_string(), styles::status_active()));
+        }
+        let line6 = Line::from(line6_spans);
+
+        vec![line1, line2, line3, line4, line5, line6]
+    } else {
+        vec![Line::from(Span::styled(
+            "No package info available",
+            styles::disabled(),
+        ))]
+    };
+
+    let paragraph = Paragraph::new(content).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Info ")
+            .title_style(styles::title_inactive())
+            .border_style(styles::border_inactive()),
+    );
+
+    frame.render_widget(paragraph, area);
+}
+
 fn format_package_name(name: &str, source_label: &str, total_width: usize) -> String {
     let combined = format!("{}{}", name, source_label);
     if combined.len() <= total_width {
@@ -81,12 +167,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let titles = vec!["Updates", "Installed", "Orphans", "Rebuilds"];
+    let titles = vec!["Updates", "Installed", "Orphans", "Rebuilds", "Search"];
     let selected = match app.tab {
         Tab::Updates => 0,
         Tab::Installed => 1,
         Tab::Orphans => 2,
         Tab::Rebuilds => 3,
+        Tab::Search => 4,
     };
 
     let tabs = Tabs::new(titles)
@@ -190,18 +277,27 @@ fn draw_content(frame: &mut Frame, app: &mut App, area: Rect) {
         Tab::Installed => draw_installed(frame, app, area),
         Tab::Orphans => draw_orphans(frame, app, area),
         Tab::Rebuilds => draw_rebuilds(frame, app, area),
+        Tab::Search => draw_search(frame, app, area),
     }
 }
 
 fn draw_updates(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = app.tab == Tab::Updates;
 
-    // Split area for filter bar if filtering
+    // Split area for info pane if visible
+    let (main_area, info_area) = if app.show_info_pane {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Split main area for filter bar if filtering
     let (filter_area, list_area) = if app.filter_mode || !app.filter_text.is_empty() {
-        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(main_area);
         (Some(chunks[0]), chunks[1])
     } else {
-        (None, area)
+        (None, main_area)
     };
 
     // Collect filtered packages into owned data
@@ -295,17 +391,30 @@ fn draw_updates(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol(if is_active { ">> " } else { "   " });
 
     frame.render_stateful_widget(list, list_area, &mut app.list_state);
+
+    // Draw info pane if visible
+    if let Some(info_area) = info_area {
+        draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
+    }
 }
 
 fn draw_installed(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = app.tab == Tab::Installed;
 
-    // Split area for filter bar if filtering
+    // Split area for info pane if visible
+    let (main_area, info_area) = if app.show_info_pane {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Split main area for filter bar if filtering
     let (filter_area, list_area) = if app.filter_mode || !app.filter_text.is_empty() {
-        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
+        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(main_area);
         (Some(chunks[0]), chunks[1])
     } else {
-        (None, area)
+        (None, main_area)
     };
 
     // Collect filtered packages into owned data to avoid borrow conflicts
@@ -388,10 +497,23 @@ fn draw_installed(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol(if is_active { ">> " } else { "   " });
 
     frame.render_stateful_widget(list, list_area, &mut app.installed_list_state);
+
+    // Draw info pane if visible
+    if let Some(info_area) = info_area {
+        draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
+    }
 }
 
 fn draw_orphans(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = app.tab == Tab::Orphans;
+
+    // Split area for info pane if visible
+    let (list_area, info_area) = if app.show_info_pane {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
 
     if app.orphan_packages.is_empty() {
         let message = if app.loading == LoadingState::Loading {
@@ -399,7 +521,10 @@ fn draw_orphans(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             "No orphan packages found"
         };
-        draw_empty_state(frame, " Orphan Packages ", message, is_active, area);
+        draw_empty_state(frame, " Orphan Packages ", message, is_active, list_area);
+        if let Some(info_area) = info_area {
+            draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
+        }
         return;
     }
 
@@ -455,11 +580,24 @@ fn draw_orphans(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(styles::row_highlight())
         .highlight_symbol(if is_active { ">> " } else { "   " });
 
-    frame.render_stateful_widget(list, area, &mut app.orphans_list_state);
+    frame.render_stateful_widget(list, list_area, &mut app.orphans_list_state);
+
+    // Draw info pane if visible
+    if let Some(info_area) = info_area {
+        draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
+    }
 }
 
 fn draw_rebuilds(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_active = app.tab == Tab::Rebuilds;
+
+    // Split area for info pane if visible
+    let (list_area, info_area) = if app.show_info_pane {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
 
     if app.rebuild_issues.is_empty() {
         let message = if app.loading == LoadingState::Loading {
@@ -469,7 +607,10 @@ fn draw_rebuilds(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             "No rebuild issues detected"
         };
-        draw_empty_state(frame, " Rebuild Issues ", message, is_active, area);
+        draw_empty_state(frame, " Rebuild Issues ", message, is_active, list_area);
+        if let Some(info_area) = info_area {
+            draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
+        }
         return;
     }
 
@@ -524,7 +665,114 @@ fn draw_rebuilds(frame: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(styles::row_highlight())
         .highlight_symbol(if is_active { ">> " } else { "   " });
 
-    frame.render_stateful_widget(list, area, &mut app.rebuilds_list_state);
+    frame.render_stateful_widget(list, list_area, &mut app.rebuilds_list_state);
+
+    // Draw info pane if visible
+    if let Some(info_area) = info_area {
+        draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
+    }
+}
+
+fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
+    let is_active = app.tab == Tab::Search;
+
+    // Split area for info pane if visible
+    let (main_area, info_area) = if app.show_info_pane {
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    // Split main area for search bar
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(main_area);
+    let search_area = chunks[0];
+    let list_area = chunks[1];
+
+    // Draw search bar
+    let search_display = format!(" Search: {}█", app.search_query);
+    let search_bar = Paragraph::new(search_display).style(styles::warning());
+    frame.render_widget(search_bar, search_area);
+
+    // Draw results
+    if app.search_results.is_empty() {
+        let message = if app.search_query.len() < 2 {
+            "Type to search packages..."
+        } else if app.search_loading {
+            "Searching..."
+        } else {
+            "No results found"
+        };
+        draw_empty_state(frame, " Search Results ", message, is_active, list_area);
+    } else {
+        let items: Vec<ListItem> = app
+            .search_results
+            .iter()
+            .enumerate()
+            .map(|(idx, result)| {
+                let is_selected = app.search_list_state.selected() == Some(idx);
+                let checkbox = if result.selected {
+                    "[x]"
+                } else if result.installed {
+                    "[=]"
+                } else {
+                    "[ ]"
+                };
+
+                let source_label = format!(" ({})", result.repository);
+                let line = Line::from(vec![
+                    Span::styled(
+                        format!("{} ", checkbox),
+                        if result.selected {
+                            styles::status_active()
+                        } else {
+                            styles::disabled()
+                        },
+                    ),
+                    Span::styled(
+                        format_package_name(&result.name, &source_label, 36),
+                        if is_selected && is_active {
+                            styles::row_highlight()
+                        } else if result.installed {
+                            styles::disabled()
+                        } else {
+                            Style::default()
+                        },
+                    ),
+                    Span::raw(" "),
+                    Span::styled(&result.version, styles::disabled()),
+                ]);
+
+                ListItem::new(line)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Search Results ({}) ", app.search_results.len()))
+                    .title_style(if is_active {
+                        styles::title_active()
+                    } else {
+                        styles::title_inactive()
+                    })
+                    .border_style(if is_active {
+                        styles::border_active()
+                    } else {
+                        styles::border_inactive()
+                    }),
+            )
+            .highlight_style(styles::row_highlight())
+            .highlight_symbol(if is_active { ">> " } else { "   " });
+
+        frame.render_stateful_widget(list, list_area, &mut app.search_list_state);
+    }
+
+    // Draw info pane if visible
+    if let Some(info_area) = info_area {
+        draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
+    }
 }
 
 fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
@@ -546,6 +794,9 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
             Line::from(vec![
                 Span::styled("Space", styles::help_key()),
                 Span::styled(" Select", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("?", styles::help_key()),
+                Span::styled(" Info", styles::help()),
                 Span::styled(" | ", styles::help()),
                 Span::styled("r", styles::help_key()),
                 Span::styled(" Refresh", styles::help()),
@@ -572,6 +823,9 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("Space", styles::help_key()),
                 Span::styled(" Select", styles::help()),
                 Span::styled(" | ", styles::help()),
+                Span::styled("?", styles::help_key()),
+                Span::styled(" Info", styles::help()),
+                Span::styled(" | ", styles::help()),
                 Span::styled("r", styles::help_key()),
                 Span::styled(" Refresh", styles::help()),
                 Span::styled(" | ", styles::help()),
@@ -590,6 +844,9 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
             Line::from(vec![
                 Span::styled("Space", styles::help_key()),
                 Span::styled(" Select", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("?", styles::help_key()),
+                Span::styled(" Info", styles::help()),
                 Span::styled(" | ", styles::help()),
                 Span::styled("r", styles::help_key()),
                 Span::styled(" Refresh", styles::help()),
@@ -610,8 +867,33 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("Space", styles::help_key()),
                 Span::styled(" Select", styles::help()),
                 Span::styled(" | ", styles::help()),
+                Span::styled("?", styles::help_key()),
+                Span::styled(" Info", styles::help()),
+                Span::styled(" | ", styles::help()),
                 Span::styled("r", styles::help_key()),
                 Span::styled(" Refresh", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("q", styles::help_key()),
+                Span::styled(" Quit", styles::help()),
+            ]),
+        ),
+        Tab::Search => (
+            Line::from(vec![
+                Span::styled("Type", styles::help_key()),
+                Span::styled(" to search", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("Enter", styles::help_key()),
+                Span::styled(" Install", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("Esc", styles::help_key()),
+                Span::styled(" Clear", styles::help()),
+            ]),
+            Line::from(vec![
+                Span::styled("Space", styles::help_key()),
+                Span::styled(" Select", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("?", styles::help_key()),
+                Span::styled(" Info", styles::help()),
                 Span::styled(" | ", styles::help()),
                 Span::styled("q", styles::help_key()),
                 Span::styled(" Quit", styles::help()),

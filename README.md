@@ -12,6 +12,8 @@ A terminal user interface (TUI) for managing Arch Linux system updates, installe
 - **Installed Tab** - Browse explicitly installed packages, uninstall or reinstall
 - **Orphans Tab** - Find and remove packages no longer needed as dependencies
 - **Rebuilds Tab** - Detect and fix ABI/version mismatch issues (e.g., after Python/Qt updates)
+- **Search Tab** - Search and install packages from official repos and AUR
+- **Info Pane** - Toggle detailed package info with `?` key (works on all tabs)
 - **Filtering** - Filter package lists by name on Updates and Installed tabs
 - **Batch Operations** - Select multiple packages with Space, select all/none with a/n
 
@@ -47,6 +49,7 @@ upkeep
 | `a` / `n` | Select all / none |
 | `f` | Enter filter mode (Updates/Installed) |
 | `F` or `Esc` | Exit filter mode |
+| `?` | Toggle info pane |
 | `r` | Refresh current tab |
 | `q` | Quit |
 
@@ -74,6 +77,13 @@ upkeep
 | Key | Action |
 |-----|--------|
 | `Enter` | Run rebuild command |
+
+#### Search Tab
+| Key | Action |
+|-----|--------|
+| `Type` | Search packages |
+| `Enter` | Install selected |
+| `Esc` | Clear search |
 
 ## Configuration
 

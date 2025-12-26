@@ -8,4 +8,5 @@ pub enum Action {
     UninstallWithDeps(Vec<String>),
     Reinstall(Vec<String>),
     ForceRebuild(Vec<String>),
+    Install(Vec<String>),
 }

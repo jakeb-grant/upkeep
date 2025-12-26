@@ -59,6 +59,12 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             run_reinstall(terminal, &app, packages, true)?;
                             app.refresh_installed();
                         }
+                        Action::Install(packages) => {
+                            run_install(terminal, &app, packages)?;
+                            app.refresh_installed();
+                            // Re-run search to update installed status
+                            app.do_search();
+                        }
                         Action::None => {}
                     }
                 }
@@ -67,6 +73,10 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
 
         // Poll for async task completions
         app.poll_tasks();
+
+        // Check if debounce timers expired
+        app.check_search_debounce();
+        app.check_info_debounce();
     }
 
     Ok(())
@@ -181,6 +191,26 @@ fn run_reinstall(
 
     if !status.success() {
         eprintln!("\nReinstall command exited with status: {}", status);
+    }
+    eprintln!("\nPress Enter to continue...");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    *terminal = ratatui::init();
+    Ok(())
+}
+
+fn run_install(terminal: &mut DefaultTerminal, app: &App, packages: Vec<String>) -> Result<()> {
+    ratatui::restore();
+
+    let helper = &app.config.aur_helper;
+    let status = std::process::Command::new(helper)
+        .arg("-S")
+        .args(&packages)
+        .status()?;
+
+    if !status.success() {
+        eprintln!("\nInstall command exited with status: {}", status);
     }
     eprintln!("\nPress Enter to continue...");
     let mut input = String::new();

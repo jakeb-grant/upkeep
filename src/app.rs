@@ -3,12 +3,20 @@ use crate::config::Config;
 use crate::rebuilds::{check_rebuilds, load_checks, RebuildCheck, RebuildIssue};
 use crate::updates::{
     check_aur_updates, check_pacman_updates, filter_items, get_installed_packages,
-    get_orphan_packages, InstalledPackage, Package, PackageSource,
+    get_orphan_packages, search_packages, InstalledPackage, Package, PackageInfo, PackageSource,
+    SearchResult,
 };
 use crossterm::event::KeyCode;
 use ratatui::widgets::ListState;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::{Duration, Instant};
+
+/// Debounce duration for search - wait this long after last keystroke before searching
+pub const SEARCH_DEBOUNCE_MS: u64 = 350;
+
+/// Debounce duration for info pane - wait this long after navigation before fetching
+pub const INFO_DEBOUNCE_MS: u64 = 100;
 
 fn clamp_selection(state: &mut ListState, len: usize) {
     if len == 0 {
@@ -25,6 +33,7 @@ pub enum Tab {
     Installed,
     Orphans,
     Rebuilds,
+    Search,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,13 +50,26 @@ pub struct App {
     pub orphan_packages: Vec<InstalledPackage>,
     pub rebuild_issues: Vec<RebuildIssue>,
     pub rebuild_checks: Vec<RebuildCheck>,
+    pub search_results: Vec<SearchResult>,
+    pub search_query: String,
+    pub search_loading: bool,
+    pending_search: Option<String>,
+    search_debounce_until: Option<Instant>,
+    current_search_id: u64,
     pub list_state: ListState,
     pub installed_list_state: ListState,
     pub orphans_list_state: ListState,
     pub rebuilds_list_state: ListState,
+    pub search_list_state: ListState,
     pub loading: LoadingState,
     pub filter_mode: bool,
     pub filter_text: String,
+    pub show_info_pane: bool,
+    pub cached_pkg_info: Option<PackageInfo>,
+    pub info_loading: bool,
+    pending_info_fetch: Option<(String, Option<PackageInfo>)>, // (name, fallback for AUR)
+    info_debounce_until: Option<Instant>,
+    current_info_id: u64,
     pending_tasks: usize,
     task_rx: Option<Receiver<TaskResult>>,
     task_tx: Sender<TaskResult>,
@@ -58,6 +80,8 @@ enum TaskResult {
     Installed(Vec<InstalledPackage>),
     Orphans(Vec<InstalledPackage>),
     Rebuilds(Vec<RebuildIssue>),
+    Search(u64, Vec<SearchResult>),      // (search_id, results)
+    PackageInfo(u64, Option<PackageInfo>), // (info_id, info)
 }
 
 impl App {
@@ -74,13 +98,26 @@ impl App {
             orphan_packages: Vec::new(),
             rebuild_issues: Vec::new(),
             rebuild_checks,
+            search_results: Vec::new(),
+            search_query: String::new(),
+            search_loading: false,
+            pending_search: None,
+            search_debounce_until: None,
+            current_search_id: 0,
             list_state: ListState::default(),
             installed_list_state: ListState::default(),
             orphans_list_state: ListState::default(),
             rebuilds_list_state: ListState::default(),
+            search_list_state: ListState::default(),
             loading: LoadingState::Idle,
             filter_mode: false,
             filter_text: String::new(),
+            show_info_pane: true,
+            cached_pkg_info: None,
+            info_loading: false,
+            pending_info_fetch: None,
+            info_debounce_until: None,
+            current_info_id: 0,
             pending_tasks: 0,
             task_rx: Some(rx),
             task_tx: tx,
@@ -155,24 +192,64 @@ impl App {
 
         // Now process results
         for result in results {
-            self.pending_tasks = self.pending_tasks.saturating_sub(1);
             match result {
                 TaskResult::Updates(pacman, aur) => {
+                    self.pending_tasks = self.pending_tasks.saturating_sub(1);
                     self.packages = pacman;
                     self.packages.extend(aur);
                     self.clamp_list_selection();
+                    if self.show_info_pane && self.tab == Tab::Updates {
+                        self.refresh_package_info();
+                    }
                 }
                 TaskResult::Installed(installed) => {
+                    self.pending_tasks = self.pending_tasks.saturating_sub(1);
                     self.installed_packages = installed;
                     self.clamp_installed_selection();
+                    if self.show_info_pane && self.tab == Tab::Installed {
+                        self.refresh_package_info();
+                    }
                 }
                 TaskResult::Orphans(orphans) => {
+                    self.pending_tasks = self.pending_tasks.saturating_sub(1);
                     self.orphan_packages = orphans;
                     self.clamp_orphans_selection();
+                    if self.show_info_pane && self.tab == Tab::Orphans {
+                        self.refresh_package_info();
+                    }
                 }
                 TaskResult::Rebuilds(issues) => {
+                    self.pending_tasks = self.pending_tasks.saturating_sub(1);
                     self.rebuild_issues = issues;
                     self.clamp_rebuilds_selection();
+                    if self.show_info_pane && self.tab == Tab::Rebuilds {
+                        self.refresh_package_info();
+                    }
+                }
+                TaskResult::Search(search_id, results) => {
+                    // Only use results if this is the current search (ignore stale results)
+                    if search_id == self.current_search_id {
+                        self.search_results = results;
+                        self.search_loading = false;
+                        self.clamp_search_selection();
+                        if self.search_results.is_empty() {
+                            self.search_list_state.select(None);
+                        } else if self.search_list_state.selected().is_none() {
+                            self.search_list_state.select(Some(0));
+                        }
+                        if self.show_info_pane {
+                            self.refresh_package_info();
+                        }
+                    }
+                    // Stale results are silently discarded
+                }
+                TaskResult::PackageInfo(info_id, info) => {
+                    // Only use results if this is the current info request (ignore stale)
+                    if info_id == self.current_info_id {
+                        self.cached_pkg_info = info;
+                        self.info_loading = false;
+                    }
+                    // Stale results are silently discarded
                 }
             }
         }
@@ -216,7 +293,7 @@ impl App {
                 let len = self.filtered_installed().len();
                 clamp_selection(&mut self.installed_list_state, len);
             }
-            Tab::Orphans | Tab::Rebuilds => {}
+            Tab::Orphans | Tab::Rebuilds | Tab::Search => {}
         }
     }
 
@@ -257,8 +334,79 @@ impl App {
                 }
                 _ => Action::None,
             }
+        } else if self.tab == Tab::Search {
+            self.handle_search_key(key)
         } else {
             self.handle_normal_key(key)
+        }
+    }
+
+    fn handle_search_key(&mut self, key: KeyCode) -> Action {
+        match key {
+            KeyCode::Char('q') => Action::Quit,
+            KeyCode::Esc => {
+                if !self.search_query.is_empty() {
+                    self.search_query.clear();
+                    self.search_results.clear();
+                    self.search_list_state.select(None);
+                    Action::None
+                } else {
+                    Action::Quit
+                }
+            }
+            KeyCode::Tab => {
+                self.tab = Tab::Updates;
+                self.load_tab_data();
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                }
+                Action::None
+            }
+            KeyCode::BackTab => {
+                self.tab = Tab::Rebuilds;
+                self.load_tab_data();
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                }
+                Action::None
+            }
+            KeyCode::Down => {
+                self.move_selection(1);
+                Action::None
+            }
+            KeyCode::Up => {
+                self.move_selection(-1);
+                Action::None
+            }
+            KeyCode::Char(' ') => {
+                self.toggle_selection();
+                Action::None
+            }
+            KeyCode::Char('?') => {
+                self.show_info_pane = !self.show_info_pane;
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                } else {
+                    self.cached_pkg_info = None;
+                    self.pending_info_fetch = None;
+                    self.info_debounce_until = None;
+                    self.info_loading = false;
+                    self.current_info_id += 1; // Invalidate in-flight fetches
+                }
+                Action::None
+            }
+            KeyCode::Enter => self.install_selected(),
+            KeyCode::Backspace => {
+                self.search_query.pop();
+                self.do_search();
+                Action::None
+            }
+            KeyCode::Char(c) => {
+                self.search_query.push(c);
+                self.do_search();
+                Action::None
+            }
+            _ => Action::None,
         }
     }
 
@@ -270,23 +418,31 @@ impl App {
                     Tab::Updates => Tab::Installed,
                     Tab::Installed => Tab::Orphans,
                     Tab::Orphans => Tab::Rebuilds,
-                    Tab::Rebuilds => Tab::Updates,
+                    Tab::Rebuilds => Tab::Search,
+                    Tab::Search => Tab::Updates,
                 };
                 self.filter_mode = false;
                 self.filter_text.clear();
                 self.load_tab_data();
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                }
                 Action::None
             }
             KeyCode::BackTab => {
                 self.tab = match self.tab {
-                    Tab::Updates => Tab::Rebuilds,
+                    Tab::Updates => Tab::Search,
                     Tab::Installed => Tab::Updates,
                     Tab::Orphans => Tab::Installed,
                     Tab::Rebuilds => Tab::Orphans,
+                    Tab::Search => Tab::Rebuilds,
                 };
                 self.filter_mode = false;
                 self.filter_text.clear();
                 self.load_tab_data();
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                }
                 Action::None
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -315,6 +471,7 @@ impl App {
                     Tab::Installed => self.refresh_installed(),
                     Tab::Orphans => self.refresh_orphans(),
                     Tab::Rebuilds => self.refresh_rebuilds(),
+                    Tab::Search => {} // Search has its own refresh via typing
                 }
                 Action::None
             }
@@ -330,6 +487,19 @@ impl App {
                 Action::None
             }
             KeyCode::Enter => self.run_action(),
+            KeyCode::Char('?') => {
+                self.show_info_pane = !self.show_info_pane;
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                } else {
+                    self.cached_pkg_info = None;
+                    self.pending_info_fetch = None;
+                    self.info_debounce_until = None;
+                    self.info_loading = false;
+                    self.current_info_id += 1; // Invalidate in-flight fetches
+                }
+                Action::None
+            }
             _ => Action::None,
         }
     }
@@ -372,6 +542,20 @@ impl App {
                     (current + delta).clamp(0, self.rebuild_issues.len() as i32 - 1) as usize;
                 self.rebuilds_list_state.select(Some(new));
             }
+            Tab::Search => {
+                if self.search_results.is_empty() {
+                    return;
+                }
+                let current = self.search_list_state.selected().unwrap_or(0) as i32;
+                let new =
+                    (current + delta).clamp(0, self.search_results.len() as i32 - 1) as usize;
+                self.search_list_state.select(Some(new));
+            }
+        }
+
+        // Refresh package info if the info pane is visible
+        if self.show_info_pane {
+            self.refresh_package_info();
         }
     }
 
@@ -412,6 +596,13 @@ impl App {
                     }
                 }
             }
+            Tab::Search => {
+                if let Some(i) = self.search_list_state.selected() {
+                    if let Some(result) = self.search_results.get_mut(i) {
+                        result.selected = !result.selected;
+                    }
+                }
+            }
         }
     }
 
@@ -444,6 +635,13 @@ impl App {
                     issue.selected = true;
                 }
             }
+            Tab::Search => {
+                for result in &mut self.search_results {
+                    if !result.installed {
+                        result.selected = true;
+                    }
+                }
+            }
         }
     }
 
@@ -474,6 +672,11 @@ impl App {
             Tab::Rebuilds => {
                 for issue in &mut self.rebuild_issues {
                     issue.selected = false;
+                }
+            }
+            Tab::Search => {
+                for result in &mut self.search_results {
+                    result.selected = false;
                 }
             }
         }
@@ -625,6 +828,10 @@ impl App {
                     Action::None
                 }
             }
+            Tab::Search => {
+                // Enter = install selected (handled by handle_search_key)
+                Action::None
+            }
         }
     }
 
@@ -663,5 +870,192 @@ impl App {
 
     pub fn filtered_updates(&self) -> Vec<(usize, &Package)> {
         filter_items(&self.packages, &self.filter_text)
+    }
+
+    fn refresh_package_info(&mut self) {
+        // For Search tab, prepare fallback from SearchResult (for uninstalled AUR packages)
+        if self.tab == Tab::Search {
+            if let Some(idx) = self.search_list_state.selected() {
+                if let Some(result) = self.search_results.get(idx) {
+                    let fallback = PackageInfo {
+                        name: result.name.clone(),
+                        version: result.version.clone(),
+                        description: result.description.clone(),
+                        size: String::new(),
+                        repository: result.repository.clone(),
+                        install_date: None,
+                        install_reason: None,
+                        url: None,
+                        build_date: None,
+                        maintainer: None,
+                        votes: None,
+                    };
+                    self.pending_info_fetch = Some((result.name.clone(), Some(fallback)));
+                    self.info_debounce_until =
+                        Some(Instant::now() + Duration::from_millis(INFO_DEBOUNCE_MS));
+                    return;
+                }
+            }
+            // No selection - clear pending and info
+            self.pending_info_fetch = None;
+            self.info_debounce_until = None;
+            self.cached_pkg_info = None;
+            self.info_loading = false;
+            return;
+        }
+
+        // For other tabs, set pending fetch (no fallback needed)
+        if let Some(pkg_name) = self.get_selected_package_name() {
+            self.pending_info_fetch = Some((pkg_name, None));
+            self.info_debounce_until =
+                Some(Instant::now() + Duration::from_millis(INFO_DEBOUNCE_MS));
+        } else {
+            self.pending_info_fetch = None;
+            self.info_debounce_until = None;
+            self.cached_pkg_info = None;
+            self.info_loading = false;
+        }
+    }
+
+    fn get_selected_package_name(&self) -> Option<String> {
+        match self.tab {
+            Tab::Updates => {
+                let filter_idx = self.list_state.selected()?;
+                let filtered = self.filtered_updates();
+                let (real_idx, _) = filtered.get(filter_idx)?;
+                self.packages.get(*real_idx).map(|p| p.name.clone())
+            }
+            Tab::Installed => {
+                let filter_idx = self.installed_list_state.selected()?;
+                let filtered = self.filtered_installed();
+                let (real_idx, _) = filtered.get(filter_idx)?;
+                self.installed_packages.get(*real_idx).map(|p| p.name.clone())
+            }
+            Tab::Orphans => {
+                let idx = self.orphans_list_state.selected()?;
+                self.orphan_packages.get(idx).map(|p| p.name.clone())
+            }
+            Tab::Rebuilds => {
+                let idx = self.rebuilds_list_state.selected()?;
+                self.rebuild_issues.get(idx).map(|i| i.name.clone())
+            }
+            Tab::Search => {
+                let idx = self.search_list_state.selected()?;
+                self.search_results.get(idx).map(|r| r.name.clone())
+            }
+        }
+    }
+
+    fn clamp_search_selection(&mut self) {
+        clamp_selection(&mut self.search_list_state, self.search_results.len());
+    }
+
+    /// Called on each keystroke - sets up debounced search
+    pub fn do_search(&mut self) {
+        if self.search_query.len() >= 2 {
+            // Set pending search with debounce
+            self.pending_search = Some(self.search_query.clone());
+            self.search_debounce_until =
+                Some(Instant::now() + Duration::from_millis(SEARCH_DEBOUNCE_MS));
+        } else {
+            // Query too short - clear results immediately
+            self.pending_search = None;
+            self.search_debounce_until = None;
+            self.search_results.clear();
+            self.search_list_state.select(None);
+            self.search_loading = false;
+            // Invalidate any in-flight searches
+            self.current_search_id += 1;
+        }
+    }
+
+    /// Check if debounce timer expired and trigger search if so
+    /// Returns true if a search was triggered
+    pub fn check_search_debounce(&mut self) -> bool {
+        if let (Some(query), Some(until)) = (&self.pending_search, self.search_debounce_until) {
+            if Instant::now() >= until {
+                let query = query.clone();
+                self.pending_search = None;
+                self.search_debounce_until = None;
+                self.trigger_search(&query);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Spawn background search thread
+    fn trigger_search(&mut self, query: &str) {
+        self.current_search_id += 1;
+        self.search_loading = true;
+
+        let search_id = self.current_search_id;
+        let query = query.to_string();
+        let tx = self.task_tx.clone();
+
+        thread::spawn(move || {
+            let results = search_packages(&query);
+            let _ = tx.send(TaskResult::Search(search_id, results));
+        });
+    }
+
+    /// Check if info debounce timer expired and trigger fetch if so
+    pub fn check_info_debounce(&mut self) -> bool {
+        if let (Some((name, fallback)), Some(until)) =
+            (&self.pending_info_fetch, self.info_debounce_until)
+        {
+            if Instant::now() >= until {
+                let name = name.clone();
+                let fallback = fallback.clone();
+                self.pending_info_fetch = None;
+                self.info_debounce_until = None;
+                self.trigger_info_fetch(&name, fallback);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Spawn background info fetch thread
+    fn trigger_info_fetch(&mut self, name: &str, fallback: Option<PackageInfo>) {
+        self.current_info_id += 1;
+        self.info_loading = true;
+
+        let info_id = self.current_info_id;
+        let name = name.to_string();
+        let tx = self.task_tx.clone();
+
+        thread::spawn(move || {
+            // Try pacman first, fall back to provided fallback (for uninstalled AUR packages)
+            let info = PackageInfo::fetch(&name).or(fallback);
+            let _ = tx.send(TaskResult::PackageInfo(info_id, info));
+        });
+    }
+
+    pub fn install_selected(&self) -> Action {
+        if self.tab != Tab::Search {
+            return Action::None;
+        }
+
+        let selected: Vec<String> = self
+            .search_results
+            .iter()
+            .filter(|r| r.selected && !r.installed)
+            .map(|r| r.name.clone())
+            .collect();
+
+        if selected.is_empty() {
+            // Use current selection if nothing explicitly selected
+            if let Some(idx) = self.search_list_state.selected() {
+                if let Some(result) = self.search_results.get(idx) {
+                    if !result.installed {
+                        return Action::Install(vec![result.name.clone()]);
+                    }
+                }
+            }
+            return Action::None;
+        }
+
+        Action::Install(selected)
     }
 }
