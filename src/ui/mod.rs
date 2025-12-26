@@ -1,7 +1,7 @@
 mod styles;
 
 use crate::app::{App, LoadingState, Tab};
-use crate::updates::PackageInfo;
+use crate::updates::{format_short_date, NewsInfo, PackageInfo};
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::Style,
@@ -167,13 +167,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let titles = vec!["Updates", "Installed", "Orphans", "Rebuilds", "Search"];
+    let titles = vec!["Updates", "Installed", "Orphans", "Rebuilds", "Search", "News"];
     let selected = match app.tab {
         Tab::Updates => 0,
         Tab::Installed => 1,
         Tab::Orphans => 2,
         Tab::Rebuilds => 3,
         Tab::Search => 4,
+        Tab::News => 5,
     };
 
     let tabs = Tabs::new(titles)
@@ -278,6 +279,7 @@ fn draw_content(frame: &mut Frame, app: &mut App, area: Rect) {
         Tab::Orphans => draw_orphans(frame, app, area),
         Tab::Rebuilds => draw_rebuilds(frame, app, area),
         Tab::Search => draw_search(frame, app, area),
+        Tab::News => draw_news(frame, app, area),
     }
 }
 
@@ -775,6 +777,186 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+fn draw_news(frame: &mut Frame, app: &mut App, area: Rect) {
+    let is_active = app.tab == Tab::News;
+
+    // Split area for info pane if visible (half screen for article content)
+    let (list_area, info_area) = if app.show_info_pane {
+        let chunks = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
+    };
+
+    if app.news_items.is_empty() {
+        let message = if app.news_loading {
+            "Loading Arch Linux news..."
+        } else if app.news_error {
+            "Failed to fetch news (press r to retry)"
+        } else {
+            "No news items available"
+        };
+        draw_empty_state(frame, " Arch News ", message, is_active, list_area);
+        if let Some(info_area) = info_area {
+            draw_news_info_pane(frame, app.cached_news_info.as_ref(), app.news_scroll, info_area);
+        }
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .news_items
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let is_selected = app.news_list_state.selected() == Some(idx);
+
+            // Build indicator: * for related, ! for attention
+            let indicator = match (item.requires_attention, !item.related_packages.is_empty()) {
+                (true, true) => "*!",
+                (true, false) => " !",
+                (false, true) => "* ",
+                (false, false) => "  ",
+            };
+
+            // Date in short format
+            let date_short = format_short_date(&item.pub_date);
+
+            let line = Line::from(vec![
+                // * indicator (blue)
+                Span::styled(
+                    &indicator[0..1],
+                    if !item.related_packages.is_empty() {
+                        styles::news_related()
+                    } else {
+                        Style::default()
+                    },
+                ),
+                // ! indicator (yellow)
+                Span::styled(
+                    &indicator[1..2],
+                    if item.requires_attention {
+                        styles::news_attention()
+                    } else {
+                        Style::default()
+                    },
+                ),
+                Span::raw(" "),
+                // Date
+                Span::styled(format!("{:<6} ", date_short), styles::disabled()),
+                // Title
+                Span::styled(
+                    truncate_with_ellipsis(&item.title, 60),
+                    if is_selected && is_active {
+                        styles::row_highlight()
+                    } else if item.requires_attention {
+                        styles::news_attention()
+                    } else {
+                        Style::default()
+                    },
+                ),
+                // Author
+                Span::styled(format!(" - {}", item.author), styles::disabled()),
+            ]);
+
+            ListItem::new(line)
+        })
+        .collect();
+
+    let attention_count = app.news_attention_count();
+    let related_count = app.news_related_count();
+    let title = if attention_count > 0 || related_count > 0 {
+        format!(
+            " Arch News ({} attention, {} related) ",
+            attention_count, related_count
+        )
+    } else {
+        format!(" Arch News ({}) ", app.news_items.len())
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_style(if is_active {
+                    styles::title_active()
+                } else {
+                    styles::title_inactive()
+                })
+                .border_style(if is_active {
+                    styles::border_active()
+                } else {
+                    styles::border_inactive()
+                }),
+        )
+        .highlight_style(styles::row_highlight())
+        .highlight_symbol(if is_active { ">> " } else { "   " });
+
+    frame.render_stateful_widget(list, list_area, &mut app.news_list_state);
+
+    // Draw info pane if visible
+    if let Some(info_area) = info_area {
+        draw_news_info_pane(frame, app.cached_news_info.as_ref(), app.news_scroll, info_area);
+    }
+}
+
+fn draw_news_info_pane(frame: &mut Frame, info: Option<&NewsInfo>, scroll: u16, area: Rect) {
+    let content = if let Some(info) = info {
+        let mut lines = vec![
+            // Line 1: Title (bold)
+            Line::from(Span::styled(&info.title, styles::title_active())),
+            // Line 2: Author and date
+            Line::from(vec![
+                Span::styled("By: ", styles::disabled()),
+                Span::styled(&info.author, styles::status_active()),
+                Span::styled(" | ", styles::disabled()),
+                Span::styled(&info.date, styles::disabled()),
+            ]),
+            // Line 3: Link
+            Line::from(vec![
+                Span::styled("Link: ", styles::disabled()),
+                Span::styled(&info.link, styles::status_active()),
+            ]),
+        ];
+
+        // Line 4: Related packages (if any)
+        if !info.related_packages.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Related: ", styles::disabled()),
+                Span::styled(info.related_packages.join(", "), styles::news_related()),
+            ]));
+        }
+
+        // Empty separator
+        lines.push(Line::from(""));
+
+        // Add all content lines (description)
+        for line in &info.content {
+            lines.push(Line::from(Span::raw(line.as_str())));
+        }
+
+        lines
+    } else {
+        vec![Line::from(Span::styled(
+            "Select a news item to view details",
+            styles::disabled(),
+        ))]
+    };
+
+    let paragraph = Paragraph::new(content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Article (Shift+↑/↓ to scroll) ")
+                .title_style(styles::title_inactive())
+                .border_style(styles::border_inactive()),
+        )
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .scroll((scroll, 0));
+
+    frame.render_widget(paragraph, area);
+}
+
 fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
     let (line1, line2) = match app.tab {
         Tab::Updates => (
@@ -894,6 +1076,31 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" | ", styles::help()),
                 Span::styled("?", styles::help_key()),
                 Span::styled(" Info", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("q", styles::help_key()),
+                Span::styled(" Quit", styles::help()),
+            ]),
+        ),
+        Tab::News => (
+            Line::from(vec![
+                Span::styled("↑/↓", styles::help_key()),
+                Span::styled(" Navigate", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("Shift+↑/↓", styles::help_key()),
+                Span::styled(" Scroll", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("*", styles::news_related()),
+                Span::styled(" related", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("!", styles::news_attention()),
+                Span::styled(" attention", styles::help()),
+            ]),
+            Line::from(vec![
+                Span::styled("?", styles::help_key()),
+                Span::styled(" Article", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("r", styles::help_key()),
+                Span::styled(" Refresh", styles::help()),
                 Span::styled(" | ", styles::help()),
                 Span::styled("q", styles::help_key()),
                 Span::styled(" Quit", styles::help()),

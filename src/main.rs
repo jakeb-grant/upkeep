@@ -31,7 +31,7 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    match app.handle_key(key.code) {
+                    match app.handle_key(key) {
                         Action::Quit => break,
                         Action::RunUpdate(packages) => {
                             run_update(terminal, &app, packages)?;

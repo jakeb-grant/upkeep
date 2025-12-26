@@ -13,7 +13,10 @@ A terminal user interface (TUI) for managing Arch Linux system updates, installe
 - **Orphans Tab** - Find and remove packages no longer needed as dependencies
 - **Rebuilds Tab** - Detect and fix ABI/version mismatch issues (e.g., after Python/Qt updates)
 - **Search Tab** - Search and install packages from official repos and AUR
-- **Info Pane** - Toggle detailed package info with `?` key (works on all tabs)
+- **News Tab** - View Arch Linux news with smart highlighting:
+  - `!` (yellow) - Items requiring manual intervention
+  - `*` (blue) - Items related to your installed packages
+- **Info Pane** - Toggle detailed package/article info with `?` key (works on all tabs)
 - **Filtering** - Filter package lists by name on Updates and Installed tabs
 - **Batch Operations** - Select multiple packages with Space, select all/none with a/n
 
@@ -84,6 +87,13 @@ upkeep
 | `Type` | Search packages |
 | `Enter` | Install selected |
 | `Esc` | Clear search |
+
+#### News Tab
+| Key | Action |
+|-----|--------|
+| `Shift+↑` / `Shift+↓` | Scroll article |
+| `PgUp` / `PgDn` | Scroll article (fast) |
+| `r` | Refresh news |
 
 ## Configuration
 

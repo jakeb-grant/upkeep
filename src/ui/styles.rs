@@ -106,3 +106,14 @@ pub fn status_focused() -> Style {
 pub fn status_danger() -> Style {
     Style::default().fg(Color::Red)
 }
+
+// News indicator styles
+/// Yellow for news items requiring attention (! indicator)
+pub fn news_attention() -> Style {
+    Style::default().fg(Color::Yellow)
+}
+
+/// Blue for news items related to installed packages (* indicator)
+pub fn news_related() -> Style {
+    Style::default().fg(Color::Blue)
+}

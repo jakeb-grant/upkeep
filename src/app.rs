@@ -2,11 +2,11 @@ use crate::action::Action;
 use crate::config::Config;
 use crate::rebuilds::{check_rebuilds, load_checks, RebuildCheck, RebuildIssue};
 use crate::updates::{
-    check_aur_updates, check_pacman_updates, filter_items, get_installed_packages,
-    get_orphan_packages, search_packages, InstalledPackage, Package, PackageInfo, PackageSource,
-    SearchResult,
+    check_aur_updates, check_pacman_updates, fetch_news, filter_items, find_related_packages,
+    get_installed_packages, get_orphan_packages, search_packages, InstalledPackage, NewsInfo,
+    NewsItem, Package, PackageInfo, PackageSource, SearchResult,
 };
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -34,6 +34,7 @@ pub enum Tab {
     Orphans,
     Rebuilds,
     Search,
+    News,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +62,12 @@ pub struct App {
     pub orphans_list_state: ListState,
     pub rebuilds_list_state: ListState,
     pub search_list_state: ListState,
+    pub news_list_state: ListState,
+    pub news_items: Vec<NewsItem>,
+    pub news_loading: bool,
+    pub news_error: bool,
+    pub cached_news_info: Option<NewsInfo>,
+    pub news_scroll: u16,
     pub loading: LoadingState,
     pub filter_mode: bool,
     pub filter_text: String,
@@ -80,8 +87,9 @@ enum TaskResult {
     Installed(Vec<InstalledPackage>),
     Orphans(Vec<InstalledPackage>),
     Rebuilds(Vec<RebuildIssue>),
-    Search(u64, Vec<SearchResult>),      // (search_id, results)
+    Search(u64, Vec<SearchResult>),        // (search_id, results)
     PackageInfo(u64, Option<PackageInfo>), // (info_id, info)
+    News(Result<Vec<NewsItem>, String>),   // Ok(items) or Err(error_message)
 }
 
 impl App {
@@ -109,6 +117,12 @@ impl App {
             orphans_list_state: ListState::default(),
             rebuilds_list_state: ListState::default(),
             search_list_state: ListState::default(),
+            news_list_state: ListState::default(),
+            news_items: Vec::new(),
+            news_loading: false,
+            news_error: false,
+            cached_news_info: None,
+            news_scroll: 0,
             loading: LoadingState::Idle,
             filter_mode: false,
             filter_text: String::new(),
@@ -178,6 +192,23 @@ impl App {
         });
     }
 
+    pub fn refresh_news(&mut self) {
+        self.news_loading = true;
+        self.news_error = false;
+        let tx = self.task_tx.clone();
+        // Get installed package names for matching
+        let installed_names: Vec<String> = self
+            .installed_packages
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+
+        thread::spawn(move || {
+            let news = fetch_news(&installed_names);
+            let _ = tx.send(TaskResult::News(news));
+        });
+    }
+
     pub fn poll_tasks(&mut self) {
         // Collect results first to avoid borrow issues
         let results: Vec<TaskResult> = if let Some(rx) = &self.task_rx {
@@ -209,6 +240,8 @@ impl App {
                     if self.show_info_pane && self.tab == Tab::Installed {
                         self.refresh_package_info();
                     }
+                    // Re-match news items now that we have installed packages
+                    self.rematch_news_packages();
                 }
                 TaskResult::Orphans(orphans) => {
                     self.pending_tasks = self.pending_tasks.saturating_sub(1);
@@ -251,6 +284,28 @@ impl App {
                     }
                     // Stale results are silently discarded
                 }
+                TaskResult::News(result) => {
+                    self.news_loading = false;
+                    match result {
+                        Ok(items) => {
+                            self.news_items = items;
+                            self.news_error = false;
+                            self.clamp_news_selection();
+                            // Auto-select first item if none selected
+                            if self.news_list_state.selected().is_none()
+                                && !self.news_items.is_empty()
+                            {
+                                self.news_list_state.select(Some(0));
+                            }
+                            if self.show_info_pane && self.tab == Tab::News {
+                                self.refresh_news_info();
+                            }
+                        }
+                        Err(_) => {
+                            self.news_error = true;
+                        }
+                    }
+                }
             }
         }
 
@@ -275,10 +330,15 @@ impl App {
         clamp_selection(&mut self.orphans_list_state, self.orphan_packages.len());
     }
 
+    fn clamp_news_selection(&mut self) {
+        clamp_selection(&mut self.news_list_state, self.news_items.len());
+    }
+
     fn load_tab_data(&mut self) {
         match self.tab {
             Tab::Installed if self.installed_packages.is_empty() => self.refresh_installed(),
             Tab::Orphans if self.orphan_packages.is_empty() => self.refresh_orphans(),
+            Tab::News if self.news_items.is_empty() => self.refresh_news(),
             _ => {}
         }
     }
@@ -293,14 +353,14 @@ impl App {
                 let len = self.filtered_installed().len();
                 clamp_selection(&mut self.installed_list_state, len);
             }
-            Tab::Orphans | Tab::Rebuilds | Tab::Search => {}
+            Tab::Orphans | Tab::Rebuilds | Tab::Search | Tab::News => {}
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyCode) -> Action {
+    pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         // Handle filter mode input
         if self.filter_mode {
-            match key {
+            match key.code {
                 KeyCode::Esc => {
                     self.filter_mode = false;
                     self.filter_text.clear();
@@ -335,9 +395,11 @@ impl App {
                 _ => Action::None,
             }
         } else if self.tab == Tab::Search {
-            self.handle_search_key(key)
+            self.handle_search_key(key.code)
+        } else if self.tab == Tab::News {
+            self.handle_news_key(key)
         } else {
-            self.handle_normal_key(key)
+            self.handle_normal_key(key.code)
         }
     }
 
@@ -355,10 +417,10 @@ impl App {
                 }
             }
             KeyCode::Tab => {
-                self.tab = Tab::Updates;
+                self.tab = Tab::News;
                 self.load_tab_data();
                 if self.show_info_pane {
-                    self.refresh_package_info();
+                    self.refresh_news_info();
                 }
                 Action::None
             }
@@ -410,6 +472,74 @@ impl App {
         }
     }
 
+    fn handle_news_key(&mut self, key: KeyEvent) -> Action {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
+            KeyCode::Tab => {
+                self.tab = Tab::Updates;
+                self.load_tab_data();
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                }
+                Action::None
+            }
+            KeyCode::BackTab => {
+                self.tab = Tab::Search;
+                self.load_tab_data();
+                if self.show_info_pane {
+                    self.refresh_package_info();
+                }
+                Action::None
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                if shift {
+                    // Shift+Down: scroll article
+                    self.news_scroll = self.news_scroll.saturating_add(3);
+                    self.clamp_news_scroll();
+                } else {
+                    // Down/j: navigate list
+                    self.move_news_selection(1);
+                }
+                Action::None
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if shift {
+                    // Shift+Up: scroll article
+                    self.news_scroll = self.news_scroll.saturating_sub(3);
+                } else {
+                    // Up/k: navigate list
+                    self.move_news_selection(-1);
+                }
+                Action::None
+            }
+            KeyCode::PageDown => {
+                self.news_scroll = self.news_scroll.saturating_add(10);
+                self.clamp_news_scroll();
+                Action::None
+            }
+            KeyCode::PageUp => {
+                self.news_scroll = self.news_scroll.saturating_sub(10);
+                Action::None
+            }
+            KeyCode::Char('r') => {
+                self.refresh_news();
+                Action::None
+            }
+            KeyCode::Char('?') => {
+                self.show_info_pane = !self.show_info_pane;
+                if self.show_info_pane {
+                    self.refresh_news_info();
+                } else {
+                    self.cached_news_info = None;
+                }
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
     fn handle_normal_key(&mut self, key: KeyCode) -> Action {
         match key {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
@@ -419,7 +549,8 @@ impl App {
                     Tab::Installed => Tab::Orphans,
                     Tab::Orphans => Tab::Rebuilds,
                     Tab::Rebuilds => Tab::Search,
-                    Tab::Search => Tab::Updates,
+                    Tab::Search => Tab::News,
+                    Tab::News => Tab::Updates,
                 };
                 self.filter_mode = false;
                 self.filter_text.clear();
@@ -431,11 +562,12 @@ impl App {
             }
             KeyCode::BackTab => {
                 self.tab = match self.tab {
-                    Tab::Updates => Tab::Search,
+                    Tab::Updates => Tab::News,
                     Tab::Installed => Tab::Updates,
                     Tab::Orphans => Tab::Installed,
                     Tab::Rebuilds => Tab::Orphans,
                     Tab::Search => Tab::Rebuilds,
+                    Tab::News => Tab::Search,
                 };
                 self.filter_mode = false;
                 self.filter_text.clear();
@@ -471,7 +603,7 @@ impl App {
                     Tab::Installed => self.refresh_installed(),
                     Tab::Orphans => self.refresh_orphans(),
                     Tab::Rebuilds => self.refresh_rebuilds(),
-                    Tab::Search => {} // Search has its own refresh via typing
+                    Tab::Search | Tab::News => {} // Search has its own refresh, News handled by handle_news_key
                 }
                 Action::None
             }
@@ -551,6 +683,10 @@ impl App {
                     (current + delta).clamp(0, self.search_results.len() as i32 - 1) as usize;
                 self.search_list_state.select(Some(new));
             }
+            Tab::News => {
+                // News uses move_news_selection instead
+                return;
+            }
         }
 
         // Refresh package info if the info pane is visible
@@ -603,6 +739,7 @@ impl App {
                     }
                 }
             }
+            Tab::News => {} // News items are not selectable
         }
     }
 
@@ -642,6 +779,7 @@ impl App {
                     }
                 }
             }
+            Tab::News => {} // News items are not selectable
         }
     }
 
@@ -679,6 +817,7 @@ impl App {
                     result.selected = false;
                 }
             }
+            Tab::News => {} // News items are not selectable
         }
     }
 
@@ -828,8 +967,9 @@ impl App {
                     Action::None
                 }
             }
-            Tab::Search => {
+            Tab::Search | Tab::News => {
                 // Enter = install selected (handled by handle_search_key)
+                // News has no action on Enter
                 Action::None
             }
         }
@@ -943,6 +1083,7 @@ impl App {
                 let idx = self.search_list_state.selected()?;
                 self.search_results.get(idx).map(|r| r.name.clone())
             }
+            Tab::News => None, // News items are not packages
         }
     }
 
@@ -1030,6 +1171,78 @@ impl App {
             let info = PackageInfo::fetch(&name).or(fallback);
             let _ = tx.send(TaskResult::PackageInfo(info_id, info));
         });
+    }
+
+    fn move_news_selection(&mut self, delta: i32) {
+        if self.news_items.is_empty() {
+            return;
+        }
+        let current = self.news_list_state.selected().unwrap_or(0) as i32;
+        let new = (current + delta).clamp(0, self.news_items.len() as i32 - 1) as usize;
+        self.news_list_state.select(Some(new));
+        self.news_scroll = 0; // Reset scroll when changing selection
+
+        if self.show_info_pane {
+            self.refresh_news_info();
+        }
+    }
+
+    /// Clamp news scroll to prevent scrolling past content
+    fn clamp_news_scroll(&mut self) {
+        if let Some(info) = &self.cached_news_info {
+            // Calculate approximate max scroll based on content lines
+            // Header: 4-5 lines (title, author/date, link, related, empty line)
+            // Content: info.content.len() lines
+            let header_lines = if info.related_packages.is_empty() { 4 } else { 5 };
+            let total_lines = header_lines + info.content.len();
+            // Allow scrolling until only a few lines remain visible
+            let max_scroll = total_lines.saturating_sub(3) as u16;
+            self.news_scroll = self.news_scroll.min(max_scroll);
+        }
+    }
+
+    fn refresh_news_info(&mut self) {
+        if let Some(idx) = self.news_list_state.selected() {
+            if let Some(item) = self.news_items.get(idx) {
+                self.cached_news_info = Some(item.to_info());
+            } else {
+                self.cached_news_info = None;
+            }
+        } else {
+            self.cached_news_info = None;
+        }
+    }
+
+    /// Re-match news items against installed packages
+    /// Called when installed packages list is updated to fix race condition
+    fn rematch_news_packages(&mut self) {
+        if self.news_items.is_empty() || self.installed_packages.is_empty() {
+            return;
+        }
+
+        let installed_names: Vec<String> = self
+            .installed_packages
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+
+        for item in &mut self.news_items {
+            let full_text = format!("{} {}", item.title, item.description);
+            item.related_packages = find_related_packages(&full_text, &installed_names);
+        }
+
+        // Refresh info pane if on news tab
+        if self.show_info_pane && self.tab == Tab::News {
+            self.refresh_news_info();
+        }
+    }
+
+    pub fn news_attention_count(&self) -> usize {
+        self.news_items.iter().filter(|n| n.requires_attention).count()
+    }
+
+    pub fn news_related_count(&self) -> usize {
+        self.news_items.iter().filter(|n| !n.related_packages.is_empty()).count()
     }
 
     pub fn install_selected(&self) -> Action {
