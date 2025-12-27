@@ -20,10 +20,10 @@
   - Maintainer + votes (AUR packages)
   - Async fetching with 100ms debounce
 
-## Phase 3: Depth & Safety
+## Phase 3: Depth & Safety ✓
 
-- [ ] **5. Arch news viewer** - Check archlinux.org news before updating (manual intervention warnings)
-- [ ] **6. Dependency view** - Show what depends on selected package before removing
+- [x] **5. Arch news viewer** - Check archlinux.org news before updating (manual intervention warnings)
+- [x] **6. Dependency view** - Show what depends on selected package before removing
 
 ## Phase 4: Polish
 

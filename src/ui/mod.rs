@@ -105,22 +105,52 @@ fn draw_info_pane(frame: &mut Frame, info: Option<&PackageInfo>, area: Rect) {
             Line::from(Span::styled("Built: ", styles::disabled()))
         };
 
-        // Line 6: Maintainer + Votes (AUR only)
-        let mut line6_spans = Vec::new();
-        if let Some(maintainer) = &info.maintainer {
-            line6_spans.push(Span::styled("Maintainer: ", styles::disabled()));
-            line6_spans.push(Span::styled(maintainer.as_str(), styles::status_active()));
-        }
-        if let Some(votes) = &info.votes {
-            if !line6_spans.is_empty() {
-                line6_spans.push(Span::styled(" | ", styles::disabled()));
-            }
-            line6_spans.push(Span::styled("Votes: ", styles::disabled()));
-            line6_spans.push(Span::styled(votes.to_string(), styles::status_active()));
-        }
-        let line6 = Line::from(line6_spans);
+        // Line 6: Required By
+        let line6 = if !info.required_by.is_empty() {
+            let pkgs = truncate_with_ellipsis(&info.required_by.join(", "), 60);
+            Line::from(vec![
+                Span::styled("Required by: ", styles::disabled()),
+                Span::styled(pkgs, styles::status_active()),
+            ])
+        } else {
+            Line::from(Span::styled("Required by: None", styles::disabled()))
+        };
 
-        vec![line1, line2, line3, line4, line5, line6]
+        // Line 7: Optional For
+        let line7 = if !info.optional_for.is_empty() {
+            let pkgs = truncate_with_ellipsis(&info.optional_for.join(", "), 60);
+            Line::from(vec![
+                Span::styled("Optional for: ", styles::disabled()),
+                Span::styled(pkgs, styles::status_active()),
+            ])
+        } else {
+            Line::from(Span::styled("Optional for: None", styles::disabled()))
+        };
+
+        // Line 8: Maintainer + Votes (AUR only)
+        let line8 = if info.maintainer.is_some() || info.votes.is_some() {
+            let mut spans = Vec::new();
+            if let Some(maintainer) = &info.maintainer {
+                spans.push(Span::styled("Maintainer: ", styles::disabled()));
+                spans.push(Span::styled(maintainer.as_str(), styles::status_active()));
+            }
+            if let Some(votes) = &info.votes {
+                if !spans.is_empty() {
+                    spans.push(Span::styled(" | ", styles::disabled()));
+                }
+                spans.push(Span::styled("Votes: ", styles::disabled()));
+                spans.push(Span::styled(votes.to_string(), styles::status_active()));
+            }
+            Line::from(spans)
+        } else {
+            Line::from("")
+        };
+
+        // Filter out empty lines
+        vec![line1, line2, line3, line4, line5, line6, line7, line8]
+            .into_iter()
+            .filter(|line| !line.spans.is_empty())
+            .collect()
     } else {
         vec![Line::from(Span::styled(
             "No package info available",
@@ -288,7 +318,7 @@ fn draw_updates(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Split area for info pane if visible
     let (main_area, info_area) = if app.show_info_pane {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(10)]).split(area);
         (chunks[0], Some(chunks[1]))
     } else {
         (area, None)
@@ -405,7 +435,7 @@ fn draw_installed(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Split area for info pane if visible
     let (main_area, info_area) = if app.show_info_pane {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(10)]).split(area);
         (chunks[0], Some(chunks[1]))
     } else {
         (area, None)
@@ -511,7 +541,7 @@ fn draw_orphans(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Split area for info pane if visible
     let (list_area, info_area) = if app.show_info_pane {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(10)]).split(area);
         (chunks[0], Some(chunks[1]))
     } else {
         (area, None)
@@ -595,7 +625,7 @@ fn draw_rebuilds(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Split area for info pane if visible
     let (list_area, info_area) = if app.show_info_pane {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(10)]).split(area);
         (chunks[0], Some(chunks[1]))
     } else {
         (area, None)
@@ -680,7 +710,7 @@ fn draw_search(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Split area for info pane if visible
     let (main_area, info_area) = if app.show_info_pane {
-        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(area);
+        let chunks = Layout::vertical([Constraint::Min(0), Constraint::Length(10)]).split(area);
         (chunks[0], Some(chunks[1]))
     } else {
         (area, None)

@@ -15,6 +15,8 @@ pub struct PackageInfo {
     pub build_date: Option<String>,
     pub maintainer: Option<String>,
     pub votes: Option<u32>,
+    pub required_by: Vec<String>,
+    pub optional_for: Vec<String>,
 }
 
 /// AUR RPC API response
@@ -175,6 +177,8 @@ impl PackageInfo {
             build_date,
             maintainer: pkg.maintainer,
             votes: pkg.num_votes,
+            required_by: Vec::new(),
+            optional_for: Vec::new(),
         })
     }
 
@@ -188,6 +192,8 @@ impl PackageInfo {
         let mut install_reason = None;
         let mut url = None;
         let mut build_date = None;
+        let mut required_by = Vec::new();
+        let mut optional_for = Vec::new();
 
         for line in output.lines() {
             if let Some((key, value)) = line.split_once(':') {
@@ -210,6 +216,20 @@ impl PackageInfo {
                     "Install Reason" => install_reason = Some(value.to_string()),
                     "URL" => url = Some(value.to_string()),
                     "Build Date" => build_date = Some(value.to_string()),
+                    "Required By" => {
+                        required_by = value
+                            .split_whitespace()
+                            .filter(|s| *s != "None")
+                            .map(String::from)
+                            .collect();
+                    }
+                    "Optional For" => {
+                        optional_for = value
+                            .split_whitespace()
+                            .filter(|s| *s != "None")
+                            .map(String::from)
+                            .collect();
+                    }
                     _ => {}
                 }
             }
@@ -231,6 +251,8 @@ impl PackageInfo {
             build_date,
             maintainer: None, // Only available from AUR RPC
             votes: None,      // Only available from AUR RPC
+            required_by,
+            optional_for,
         })
     }
 }

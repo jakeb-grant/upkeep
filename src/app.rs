@@ -1029,6 +1029,8 @@ impl App {
                         build_date: None,
                         maintainer: None,
                         votes: None,
+                        required_by: Vec::new(),
+                        optional_for: Vec::new(),
                     };
                     self.pending_info_fetch = Some((result.name.clone(), Some(fallback)));
                     self.info_debounce_until =
