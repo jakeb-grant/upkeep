@@ -98,9 +98,9 @@ enum TaskResult {
     Installed(Vec<InstalledPackage>),
     Orphans(Vec<InstalledPackage>),
     Rebuilds(Vec<RebuildIssue>),
-    Search(u64, Vec<SearchResult>),        // (search_id, results)
-    PackageInfo(u64, Option<PackageInfo>), // (info_id, info)
-    News(Result<Vec<NewsItem>, String>),   // Ok(items) or Err(error_message)
+    Search(u64, Vec<SearchResult>),             // (search_id, results)
+    PackageInfo(u64, Box<Option<PackageInfo>>), // (info_id, info)
+    News(Result<Vec<NewsItem>, String>),        // Ok(items) or Err(error_message)
 }
 
 impl App {
@@ -292,7 +292,7 @@ impl App {
                 TaskResult::PackageInfo(info_id, info) => {
                     // Only use results if this is the current info request (ignore stale)
                     if info_id == self.current_info_id {
-                        self.cached_pkg_info = info;
+                        self.cached_pkg_info = *info;
                         self.info_loading = false;
                     }
                     // Stale results are silently discarded
@@ -1343,7 +1343,7 @@ impl App {
         thread::spawn(move || {
             // Try pacman first, fall back to provided fallback (for uninstalled AUR packages)
             let info = PackageInfo::fetch(&name).or(fallback);
-            let _ = tx.send(TaskResult::PackageInfo(info_id, info));
+            let _ = tx.send(TaskResult::PackageInfo(info_id, Box::new(info)));
         });
     }
 

@@ -200,7 +200,7 @@ impl PackageInfo {
                 let key = key.trim();
                 // URL contains ":" so we need to reconstruct the full value
                 let value = if key == "URL" {
-                    line.splitn(2, ':').nth(1).unwrap_or("").trim()
+                    line.split_once(':').map(|x| x.1).unwrap_or("").trim()
                 } else {
                     value.trim()
                 };
