@@ -9,4 +9,5 @@ pub enum Action {
     Reinstall(Vec<String>),
     ForceRebuild(Vec<String>),
     Install(Vec<String>),
+    CleanCache,
 }

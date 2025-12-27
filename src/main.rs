@@ -65,6 +65,9 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                             // Re-run search to update installed status
                             app.do_search();
                         }
+                        Action::CleanCache => {
+                            run_cache_cleanup(terminal)?;
+                        }
                         Action::None => {}
                     }
                 }
@@ -211,6 +214,25 @@ fn run_install(terminal: &mut DefaultTerminal, app: &App, packages: Vec<String>)
 
     if !status.success() {
         eprintln!("\nInstall command exited with status: {}", status);
+    }
+    eprintln!("\nPress Enter to continue...");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    *terminal = ratatui::init();
+    Ok(())
+}
+
+fn run_cache_cleanup(terminal: &mut DefaultTerminal) -> Result<()> {
+    ratatui::restore();
+
+    println!("Cleaning package cache...\n");
+    let status = std::process::Command::new("paccache")
+        .arg("-r")
+        .status()?;
+
+    if !status.success() {
+        eprintln!("\nCache cleanup exited with status: {}", status);
     }
     eprintln!("\nPress Enter to continue...");
     let mut input = String::new();

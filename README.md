@@ -61,6 +61,7 @@ upkeep
 |-----|--------|
 | `u` | Update selected packages |
 | `Enter` | Update all packages |
+| `c` | Clean package cache |
 
 #### Installed Tab
 | Key | Action |

@@ -25,13 +25,14 @@
 - [x] **5. Arch news viewer** - Check archlinux.org news before updating (manual intervention warnings)
 - [x] **6. Dependency view** - Show what depends on selected package before removing
 
-## Phase 4: Polish
+## Phase 4: Maintenance Tools
 
-- [ ] **7. Sort options** - Sort by name, size, date installed
-- [ ] **8. Cache cleanup** - Clear old package versions (`paccache -r`)
+- [x] **7. Cache cleanup** - Clear old package versions (`paccache -r`)
+- [ ] **8. Export package list** - Backup of explicitly installed packages (`pacman -Qqe`)
+- [ ] **9. Update confirmation** - Preview what will be installed/removed before running
 
 ## Phase 5: Nice to Have
 
-- [ ] **Export package list** - Backup of explicitly installed packages
+- [ ] **Sort options** - Sort by name, size, date installed
 - [ ] **Downgrade support** - Rollback packages via downgrade tool
 - [ ] **System info header** - Kernel version, last update date

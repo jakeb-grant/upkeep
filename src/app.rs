@@ -608,6 +608,13 @@ impl App {
                 Action::None
             }
             KeyCode::Char('u') => self.run_selected_update(),
+            KeyCode::Char('c') => {
+                if self.tab == Tab::Updates {
+                    Action::CleanCache
+                } else {
+                    Action::None
+                }
+            }
             KeyCode::Char('d') => self.uninstall_selected(false),
             KeyCode::Char('D') => self.uninstall_selected(true),
             KeyCode::Char('i') => self.reinstall_selected(false),
