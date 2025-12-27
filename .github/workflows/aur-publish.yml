@@ -1,0 +1,37 @@
+name: Publish to AUR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  aur-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git describe
+
+      - name: Compute pkgver
+        id: pkgver
+        run: |
+          VERSION=$(git describe --long --tags 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./' || printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Computed pkgver: $VERSION"
+
+      - name: Update PKGBUILD with computed pkgver
+        run: |
+          sed -i "s/^pkgver=.*/pkgver=${{ steps.pkgver.outputs.version }}/" PKGBUILD
+          cat PKGBUILD
+
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
+        with:
+          pkgname: upkeep-git
+          pkgbuild: ./PKGBUILD
+          commit_username: 'github-actions[bot]'
+          commit_email: 'github-actions[bot]@users.noreply.github.com'
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ steps.pkgver.outputs.version }}"
