@@ -87,6 +87,7 @@ pub struct App {
     info_debounce_until: Option<Instant>,
     current_info_id: u64,
     pub pending_confirmation: Option<ConfirmationState>,
+    pub last_message: Option<String>,
     pending_tasks: usize,
     task_rx: Option<Receiver<TaskResult>>,
     task_tx: Sender<TaskResult>,
@@ -143,6 +144,7 @@ impl App {
             info_debounce_until: None,
             current_info_id: 0,
             pending_confirmation: None,
+            last_message: None,
             pending_tasks: 0,
             task_rx: Some(rx),
             task_tx: tx,
@@ -487,6 +489,9 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
+        // Clear any flash message on key press
+        self.last_message = None;
+
         // Handle confirmation mode first
         if self.pending_confirmation.is_some() {
             return self.handle_confirmation_key(key);
@@ -748,9 +753,14 @@ impl App {
                 let action = self.run_selected_update();
                 self.maybe_confirm(action)
             }
-            KeyCode::Char('c') => {
-                if self.tab == Tab::Updates {
-                    self.maybe_confirm(Action::CleanCache)
+            KeyCode::Char('c') => match self.tab {
+                Tab::Updates => self.maybe_confirm(Action::CleanCache),
+                Tab::Installed => Action::ExportPackages,
+                _ => Action::None,
+            },
+            KeyCode::Char('C') => {
+                if self.tab == Tab::Installed {
+                    Action::CopyPackages
                 } else {
                     Action::None
                 }

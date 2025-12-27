@@ -70,6 +70,8 @@ upkeep
 | `D` | Remove with dependencies |
 | `i` | Reinstall package(s) |
 | `I` | Reinstall from source (AUR rebuild) |
+| `c` | Export package lists to files |
+| `C` | Copy package list to clipboard |
 
 #### Orphans Tab
 | Key | Action |

@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod backup;
 mod config;
 mod rebuilds;
 mod ui;
@@ -67,6 +68,25 @@ fn run(terminal: &mut DefaultTerminal) -> Result<()> {
                         }
                         Action::CleanCache => {
                             run_cache_cleanup(terminal)?;
+                        }
+                        Action::ExportPackages => {
+                            app.last_message = match backup::export_packages() {
+                                Ok((pkg_path, _, pkg_count, aur_count)) => {
+                                    Some(format!("Exported {} + {} AUR to {}", pkg_count, aur_count, pkg_path.parent().unwrap().display()))
+                                }
+                                Err(e) => Some(format!("Export failed: {}", e)),
+                            };
+                        }
+                        Action::CopyPackages => {
+                            app.last_message = match backup::get_package_list() {
+                                Ok((list, official, aur)) => {
+                                    match backup::copy_to_clipboard(&list) {
+                                        Ok(()) => Some(format!("Copied {} + {} AUR to clipboard", official, aur)),
+                                        Err(e) => Some(format!("Copy failed: {}", e)),
+                                    }
+                                }
+                                Err(e) => Some(format!("Failed: {}", e)),
+                            };
                         }
                         Action::None => {}
                     }
@@ -241,3 +261,4 @@ fn run_cache_cleanup(terminal: &mut DefaultTerminal) -> Result<()> {
     *terminal = ratatui::init();
     Ok(())
 }
+

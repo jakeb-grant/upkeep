@@ -31,7 +31,9 @@
 - [x] **8. Update confirmation** - Preview what will be installed/removed before running
   - Confirms: Update all, Update selected, Uninstall, Uninstall with deps, Cache cleanup
   - Modular design - easy to add confirmation to new actions
-- [ ] **9. Export package list** - Backup of explicitly installed packages (`pacman -Qqe`)
+- [x] **9. Export package list** - Backup of explicitly installed packages
+  - `c` on Installed tab exports to `~/.config/upkeep/backups/`
+  - `C` copies to clipboard with official/AUR sections
 
 ## Phase 5: Nice to Have
 

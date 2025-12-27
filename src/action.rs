@@ -10,4 +10,6 @@ pub enum Action {
     ForceRebuild(Vec<String>),
     Install(Vec<String>),
     CleanCache,
+    ExportPackages,
+    CopyPackages,
 }

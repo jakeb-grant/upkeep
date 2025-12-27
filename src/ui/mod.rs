@@ -224,6 +224,15 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
+    // Show flash message if present
+    if let Some(msg) = &app.last_message {
+        let paragraph = Paragraph::new(Line::from(vec![
+            Span::styled(format!(" {}", msg), styles::status_active()),
+        ]));
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
     let width = area.width as usize;
 
     let loading = app.loading == LoadingState::Loading;
@@ -1038,12 +1047,15 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled("i/I", styles::help_key()),
                 Span::styled(" Reinstall/src", styles::help()),
                 Span::styled(" | ", styles::help()),
-                Span::styled("a/n", styles::help_key()),
-                Span::styled(" All/None", styles::help()),
+                Span::styled("c/C", styles::help_key()),
+                Span::styled(" Export/Copy", styles::help()),
             ]),
             Line::from(vec![
                 Span::styled("Space", styles::help_key()),
                 Span::styled(" Select", styles::help()),
+                Span::styled(" | ", styles::help()),
+                Span::styled("a/n", styles::help_key()),
+                Span::styled(" All/None", styles::help()),
                 Span::styled(" | ", styles::help()),
                 Span::styled("?", styles::help_key()),
                 Span::styled(" Info", styles::help()),
