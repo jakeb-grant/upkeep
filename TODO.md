@@ -25,11 +25,13 @@
 - [x] **5. Arch news viewer** - Check archlinux.org news before updating (manual intervention warnings)
 - [x] **6. Dependency view** - Show what depends on selected package before removing
 
-## Phase 4: Maintenance Tools
+## Phase 4: Maintenance Tools ✓
 
 - [x] **7. Cache cleanup** - Clear old package versions (`paccache -r`)
-- [ ] **8. Export package list** - Backup of explicitly installed packages (`pacman -Qqe`)
-- [ ] **9. Update confirmation** - Preview what will be installed/removed before running
+- [x] **8. Update confirmation** - Preview what will be installed/removed before running
+  - Confirms: Update all, Update selected, Uninstall, Uninstall with deps, Cache cleanup
+  - Modular design - easy to add confirmation to new actions
+- [ ] **9. Export package list** - Backup of explicitly installed packages (`pacman -Qqe`)
 
 ## Phase 5: Nice to Have
 

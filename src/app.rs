@@ -43,6 +43,15 @@ pub enum LoadingState {
     Loading,
 }
 
+/// Pending confirmation for an action
+#[derive(Debug, Clone)]
+pub struct ConfirmationState {
+    pub action: Action,
+    pub title: String,
+    pub items: Vec<String>,
+    pub message: String,
+}
+
 pub struct App {
     pub config: Config,
     pub tab: Tab,
@@ -77,6 +86,7 @@ pub struct App {
     pending_info_fetch: Option<(String, Option<PackageInfo>)>, // (name, fallback for AUR)
     info_debounce_until: Option<Instant>,
     current_info_id: u64,
+    pub pending_confirmation: Option<ConfirmationState>,
     pending_tasks: usize,
     task_rx: Option<Receiver<TaskResult>>,
     task_tx: Sender<TaskResult>,
@@ -132,6 +142,7 @@ impl App {
             pending_info_fetch: None,
             info_debounce_until: None,
             current_info_id: 0,
+            pending_confirmation: None,
             pending_tasks: 0,
             task_rx: Some(rx),
             task_tx: tx,
@@ -357,7 +368,130 @@ impl App {
         }
     }
 
+    /// Check if action requires confirmation
+    fn requires_confirmation(action: &Action) -> bool {
+        matches!(
+            action,
+            Action::RunUpdate(_)
+                | Action::Uninstall(_)
+                | Action::UninstallWithDeps(_)
+                | Action::Reinstall(_)
+                | Action::ForceRebuild(_)
+                | Action::Install(_)
+                | Action::RunRebuild(_)
+                | Action::CleanCache
+        )
+    }
+
+    /// Build confirmation state for an action
+    fn build_confirmation(&self, action: Action) -> ConfirmationState {
+        let (title, items, message) = match &action {
+            Action::RunUpdate(pkgs) => {
+                if pkgs.is_empty() {
+                    // Update all
+                    let items: Vec<String> = self
+                        .packages
+                        .iter()
+                        .map(|p| format!("{} {} → {}", p.name, p.old_version, p.new_version))
+                        .collect();
+                    let count = self.packages.len();
+                    (
+                        "Update All Packages".to_string(),
+                        items,
+                        format!("{} package(s) will be updated", count),
+                    )
+                } else {
+                    // Update selected
+                    let items: Vec<String> = self
+                        .packages
+                        .iter()
+                        .filter(|p| pkgs.contains(&p.name))
+                        .map(|p| format!("{} {} → {}", p.name, p.old_version, p.new_version))
+                        .collect();
+                    let count = pkgs.len();
+                    (
+                        "Update Selected Packages".to_string(),
+                        items,
+                        format!("{} package(s) will be updated", count),
+                    )
+                }
+            }
+            Action::Uninstall(pkgs) => (
+                "Remove Packages".to_string(),
+                pkgs.clone(),
+                format!("{} package(s) will be removed", pkgs.len()),
+            ),
+            Action::UninstallWithDeps(pkgs) => (
+                "Remove Packages (with dependencies)".to_string(),
+                pkgs.clone(),
+                format!("{} package(s) will be removed (including deps)", pkgs.len()),
+            ),
+            Action::Reinstall(pkgs) => (
+                "Reinstall Packages".to_string(),
+                pkgs.clone(),
+                format!("{} package(s) will be reinstalled", pkgs.len()),
+            ),
+            Action::ForceRebuild(pkgs) => (
+                "Rebuild Packages from Source".to_string(),
+                pkgs.clone(),
+                format!("{} package(s) will be rebuilt from source", pkgs.len()),
+            ),
+            Action::Install(pkgs) => (
+                "Install Packages".to_string(),
+                pkgs.clone(),
+                format!("{} package(s) will be installed", pkgs.len()),
+            ),
+            Action::RunRebuild(cmd) => (
+                "Run Rebuild Command".to_string(),
+                vec![cmd.clone()],
+                "This command will be executed".to_string(),
+            ),
+            Action::CleanCache => (
+                "Clean Package Cache".to_string(),
+                vec![],
+                "Old package versions will be removed".to_string(),
+            ),
+            _ => unreachable!(),
+        };
+
+        ConfirmationState {
+            action,
+            title,
+            items,
+            message,
+        }
+    }
+
+    /// Wrap an action with confirmation if required
+    fn maybe_confirm(&mut self, action: Action) -> Action {
+        if Self::requires_confirmation(&action) {
+            self.pending_confirmation = Some(self.build_confirmation(action));
+            Action::None
+        } else {
+            action
+        }
+    }
+
+    fn handle_confirmation_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                let state = self.pending_confirmation.take().unwrap();
+                state.action
+            }
+            KeyCode::Esc | KeyCode::Char('n') => {
+                self.pending_confirmation = None;
+                Action::None
+            }
+            _ => Action::None,
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
+        // Handle confirmation mode first
+        if self.pending_confirmation.is_some() {
+            return self.handle_confirmation_key(key);
+        }
+
         // Handle filter mode input
         if self.filter_mode {
             match key.code {
@@ -457,7 +591,10 @@ impl App {
                 }
                 Action::None
             }
-            KeyCode::Enter => self.install_selected(),
+            KeyCode::Enter => {
+                let action = self.install_selected();
+                self.maybe_confirm(action)
+            }
             KeyCode::Backspace => {
                 self.search_query.pop();
                 self.do_search();
@@ -607,25 +744,43 @@ impl App {
                 }
                 Action::None
             }
-            KeyCode::Char('u') => self.run_selected_update(),
+            KeyCode::Char('u') => {
+                let action = self.run_selected_update();
+                self.maybe_confirm(action)
+            }
             KeyCode::Char('c') => {
                 if self.tab == Tab::Updates {
-                    Action::CleanCache
+                    self.maybe_confirm(Action::CleanCache)
                 } else {
                     Action::None
                 }
             }
-            KeyCode::Char('d') => self.uninstall_selected(false),
-            KeyCode::Char('D') => self.uninstall_selected(true),
-            KeyCode::Char('i') => self.reinstall_selected(false),
-            KeyCode::Char('I') => self.reinstall_selected(true),
+            KeyCode::Char('d') => {
+                let action = self.uninstall_selected(false);
+                self.maybe_confirm(action)
+            }
+            KeyCode::Char('D') => {
+                let action = self.uninstall_selected(true);
+                self.maybe_confirm(action)
+            }
+            KeyCode::Char('i') => {
+                let action = self.reinstall_selected(false);
+                self.maybe_confirm(action)
+            }
+            KeyCode::Char('I') => {
+                let action = self.reinstall_selected(true);
+                self.maybe_confirm(action)
+            }
             KeyCode::Char('f') => {
                 if self.tab == Tab::Updates || self.tab == Tab::Installed {
                     self.filter_mode = true;
                 }
                 Action::None
             }
-            KeyCode::Enter => self.run_action(),
+            KeyCode::Enter => {
+                let action = self.run_action();
+                self.maybe_confirm(action)
+            }
             KeyCode::Char('?') => {
                 self.show_info_pane = !self.show_info_pane;
                 if self.show_info_pane {

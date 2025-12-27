@@ -1,3 +1,4 @@
+mod confirm;
 mod styles;
 
 use crate::app::{App, LoadingState, Tab};
@@ -303,6 +304,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_content(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Draw normal content first
     match app.tab {
         Tab::Updates => draw_updates(frame, app, area),
         Tab::Installed => draw_installed(frame, app, area),
@@ -310,6 +312,11 @@ fn draw_content(frame: &mut Frame, app: &mut App, area: Rect) {
         Tab::Rebuilds => draw_rebuilds(frame, app, area),
         Tab::Search => draw_search(frame, app, area),
         Tab::News => draw_news(frame, app, area),
+    }
+
+    // Draw confirmation overlay if active
+    if let Some(state) = &app.pending_confirmation {
+        confirm::draw_confirmation(frame, state, area);
     }
 }
 
