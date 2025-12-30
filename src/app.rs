@@ -544,7 +544,6 @@ impl App {
 
     fn handle_search_key(&mut self, key: KeyCode) -> Action {
         match key {
-            KeyCode::Char('q') => Action::Quit,
             KeyCode::Esc => {
                 if !self.search_query.is_empty() {
                     self.search_query.clear();
