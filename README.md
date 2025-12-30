@@ -22,6 +22,21 @@ A terminal user interface (TUI) for managing Arch Linux system updates, installe
 
 ## Installation
 
+### AUR (recommended)
+
+```bash
+yay -S upkeep-git
+```
+
+### Prebuilt binary
+
+Download from [GitHub Releases](https://github.com/jakeb-grant/upkeep/releases):
+
+```bash
+tar -xzf upkeep-v*.tar.gz
+sudo mv upkeep /usr/local/bin/
+```
+
 ### From source
 
 ```bash
@@ -33,7 +48,6 @@ sudo cp target/release/upkeep /usr/local/bin/
 
 ### Dependencies
 
-- Rust 1.70+
 - An AUR helper (`yay` by default, configurable)
 
 ## Usage
