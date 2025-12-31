@@ -509,11 +509,11 @@ impl App {
                     self.filter_mode = false;
                     Action::None
                 }
-                KeyCode::Char('j') | KeyCode::Down => {
+                KeyCode::Down => {
                     self.move_selection(1);
                     Action::None
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
+                KeyCode::Up => {
                     self.move_selection(-1);
                     Action::None
                 }
