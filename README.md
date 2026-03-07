@@ -11,7 +11,7 @@ A terminal user interface (TUI) for managing Arch Linux system updates, installe
 - **Updates Tab** - View and install pending pacman and AUR updates
 - **Installed Tab** - Browse explicitly installed packages, uninstall or reinstall
 - **Orphans Tab** - Find and remove packages no longer needed as dependencies
-- **Rebuilds Tab** - Detect and fix ABI/version mismatch issues (e.g., after Python/Qt updates)
+- **Rebuilds Tab** - Detect and fix ABI/version mismatch issues (e.g., after Python/Qt updates) and track custom-patched packages against upstream
 - **Search Tab** - Search and install packages from official repos and AUR
 - **News Tab** - View Arch Linux news with smart highlighting:
   - `!` (yellow) - Items requiring manual intervention
@@ -125,21 +125,28 @@ aur_helper = "yay"
 
 ### checks.toml
 
-Define custom rebuild checks for applications that break after system updates:
+Define rebuild checks for applications that break after system updates:
 
 ```toml
+# Error-pattern check: runs a command and looks for error strings in stderr
 [[check]]
 name = "obs-studio"
 command = ["timeout", "3", "obs", "--help"]
 error_patterns = ["ABI mismatch", "symbol lookup error"]
 rebuild = "yay -S --rebuild obs-studio"
-
-[[check]]
-name = "my-aur-package"
-command = ["timeout", "3", "my-app", "--version"]
-error_patterns = ["plugin was built with a different version"]
-rebuild = "yay -S --rebuild my-aur-package"
 ```
+
+You can also track custom-patched packages against their upstream counterparts. When the upstream version is newer than your installed version, the check triggers:
+
+```toml
+# Version-track check: compares installed version against official repo
+[[check]]
+name = "libadwaita-custom"
+tracks = "libadwaita"
+rebuild = "libadwaita-rebuild bump"
+```
+
+All configured checks are shown in the Rebuilds tab with their current status (passing or triggered).
 
 ## Roadmap
 

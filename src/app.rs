@@ -1,6 +1,6 @@
 use crate::action::Action;
 use crate::config::Config;
-use crate::rebuilds::{check_rebuilds, load_checks, RebuildCheck, RebuildIssue};
+use crate::rebuilds::{check_rebuilds, load_checks, CheckStatus, RebuildCheck, RebuildIssue};
 use crate::updates::{
     check_aur_updates, check_pacman_updates, fetch_news, filter_items, find_related_packages,
     get_installed_packages, get_orphan_packages, search_packages, InstalledPackage, NewsInfo,
@@ -899,7 +899,9 @@ impl App {
             Tab::Rebuilds => {
                 if let Some(i) = self.rebuilds_list_state.selected() {
                     if let Some(issue) = self.rebuild_issues.get_mut(i) {
-                        issue.selected = !issue.selected;
+                        if issue.status == CheckStatus::Triggered {
+                            issue.selected = !issue.selected;
+                        }
                     }
                 }
             }
@@ -940,7 +942,9 @@ impl App {
             }
             Tab::Rebuilds => {
                 for issue in &mut self.rebuild_issues {
-                    issue.selected = true;
+                    if issue.status == CheckStatus::Triggered {
+                        issue.selected = true;
+                    }
                 }
             }
             Tab::Search => {
@@ -1120,9 +1124,12 @@ impl App {
                 Action::None
             }
             Tab::Rebuilds => {
-                // Run selected rebuild or current one
-                let selected: Vec<&RebuildIssue> =
-                    self.rebuild_issues.iter().filter(|i| i.selected).collect();
+                // Run selected rebuild or current triggered one
+                let selected: Vec<&RebuildIssue> = self
+                    .rebuild_issues
+                    .iter()
+                    .filter(|i| i.selected && i.status == CheckStatus::Triggered)
+                    .collect();
 
                 if !selected.is_empty() {
                     let commands: Vec<String> =
@@ -1130,7 +1137,11 @@ impl App {
                     Action::RunRebuild(commands.join(" && "))
                 } else if let Some(i) = self.rebuilds_list_state.selected() {
                     if let Some(issue) = self.rebuild_issues.get(i) {
-                        Action::RunRebuild(issue.rebuild_command.clone())
+                        if issue.status == CheckStatus::Triggered {
+                            Action::RunRebuild(issue.rebuild_command.clone())
+                        } else {
+                            Action::None
+                        }
                     } else {
                         Action::None
                     }

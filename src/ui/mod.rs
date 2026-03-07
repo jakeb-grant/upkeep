@@ -2,6 +2,7 @@ mod confirm;
 mod styles;
 
 use crate::app::{App, LoadingState, Tab};
+use crate::rebuilds::CheckStatus;
 use crate::updates::{format_short_date, NewsInfo, PackageInfo};
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
@@ -241,7 +242,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let inst = app.installed_count();
     let inst_aur = app.installed_aur_count();
     let orph = app.orphan_count();
-    let rebuild = app.rebuild_issues.len();
+    let rebuild = app.rebuild_issues.iter().filter(|i| i.status == CheckStatus::Triggered).count();
 
     let pac_style = if pac > 0 { styles::warning() } else { styles::status_active() };
     let aur_style = if aur > 0 { styles::warning() } else { styles::status_active() };
@@ -650,12 +651,10 @@ fn draw_rebuilds(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.rebuild_issues.is_empty() {
         let message = if app.loading == LoadingState::Loading {
             "Checking for rebuild issues..."
-        } else if app.rebuild_checks.is_empty() {
-            "No rebuild checks configured\nAdd checks to ~/.config/upkeep/checks.toml"
         } else {
-            "No rebuild issues detected"
+            "No rebuild checks configured\nAdd checks to ~/.config/upkeep/checks.toml"
         };
-        draw_empty_state(frame, " Rebuild Issues ", message, is_active, list_area);
+        draw_empty_state(frame, " Rebuild Checks ", message, is_active, list_area);
         if let Some(info_area) = info_area {
             draw_info_pane(frame, app.cached_pkg_info.as_ref(), info_area);
         }
@@ -668,26 +667,34 @@ fn draw_rebuilds(frame: &mut Frame, app: &mut App, area: Rect) {
         .enumerate()
         .map(|(idx, issue)| {
             let is_selected = app.rebuilds_list_state.selected() == Some(idx);
-            let checkbox = if issue.selected { "[x]" } else { "[ ]" };
+            let triggered = issue.status == CheckStatus::Triggered;
+
+            let checkbox = if !triggered {
+                Span::styled("  ✓ ", styles::status_active())
+            } else if issue.selected {
+                Span::styled("[x] ", styles::status_active())
+            } else {
+                Span::styled("[ ] ", styles::disabled())
+            };
+
+            let name_style = if is_selected && is_active {
+                styles::row_highlight()
+            } else if triggered {
+                styles::error()
+            } else {
+                styles::disabled()
+            };
+
+            let detail_text = match &issue.detail {
+                Some(detail) => format!(" {}", detail),
+                None if triggered => " - needs rebuild".to_string(),
+                None => " - ok".to_string(),
+            };
 
             let line = Line::from(vec![
-                Span::styled(
-                    format!("{} ", checkbox),
-                    if issue.selected {
-                        styles::status_active()
-                    } else {
-                        styles::disabled()
-                    },
-                ),
-                Span::styled(
-                    &issue.name,
-                    if is_selected && is_active {
-                        styles::row_highlight()
-                    } else {
-                        styles::error()
-                    },
-                ),
-                Span::styled(" - needs rebuild", styles::disabled()),
+                checkbox,
+                Span::styled(&issue.name, name_style),
+                Span::styled(detail_text, styles::disabled()),
             ]);
 
             ListItem::new(line)
@@ -698,7 +705,7 @@ fn draw_rebuilds(frame: &mut Frame, app: &mut App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Rebuild Issues ")
+                .title(" Rebuild Checks ")
                 .title_style(if is_active {
                     styles::title_active()
                 } else {
