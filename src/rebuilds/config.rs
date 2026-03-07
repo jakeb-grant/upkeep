@@ -6,8 +6,13 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Deserialize)]
 pub struct RebuildCheck {
     pub name: String,
-    pub command: Vec<String>,
-    pub error_patterns: Vec<String>,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    #[serde(default)]
+    pub error_patterns: Option<Vec<String>>,
+    /// Official repo package this custom package tracks (version-track mode)
+    #[serde(default)]
+    pub tracks: Option<String>,
     pub rebuild: String,
 }
 
@@ -48,7 +53,7 @@ fn create_default_checks() -> Result<()> {
 #   error_patterns - Strings to look for in stderr that indicate a rebuild is needed
 #   rebuild        - Shell command to run to fix the issue
 
-# Example check (uncomment and modify as needed):
+# Example error-pattern check (uncomment and modify as needed):
 # [[check]]
 # name = "elephant"
 # command = ["timeout", "3", "elephant"]
@@ -60,6 +65,13 @@ fn create_default_checks() -> Result<()> {
 # command = ["timeout", "3", "obs", "--help"]
 # error_patterns = ["ABI mismatch", "symbol lookup error"]
 # rebuild = "yay -S --rebuild obs-studio"
+
+# Example version-track check for custom-patched packages:
+# Detects when your installed package falls behind the official repo version.
+# [[check]]
+# name = "libadwaita-custom"
+# tracks = "libadwaita"
+# rebuild = "libadwaita-rebuild bump"
 "#;
 
     std::fs::write(checks_path(), content)?;
