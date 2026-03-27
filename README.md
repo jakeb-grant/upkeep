@@ -149,10 +149,6 @@ rebuild = "libadwaita-rebuild bump"
 
 All configured checks are shown in the Rebuilds tab with their current status (passing or triggered).
 
-## Roadmap
-
-See [TODO.md](TODO.md) for planned features.
-
 ## License
 
 MIT
