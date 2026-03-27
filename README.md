@@ -2,9 +2,10 @@
 
 A terminal user interface (TUI) for managing Arch Linux system updates, installed packages, orphans, and rebuild issues.
 
-![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Arch Linux](https://img.shields.io/badge/Arch-Linux-1793D1?logo=arch-linux)
+[![AUR](https://img.shields.io/aur/version/upkeep-git?label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/upkeep-git)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Arch updates are easy until they aren't — a Python upgrade breaks half your AUR packages, an orphan you forgot about pulls in a dependency chain, and the news post you didn't read needed manual intervention. upkeep puts all of that in one TUI so you can see what's broken, what's stale, and what needs attention before you hit Enter.
 
 ## Features
 

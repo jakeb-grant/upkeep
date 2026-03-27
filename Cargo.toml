@@ -3,6 +3,8 @@ name = "upkeep"
 version = "0.1.0"
 edition = "2021"
 description = "Arch Linux system updater TUI"
+license = "MIT"
+repository = "https://github.com/jakeb-grant/upkeep"
 
 [dependencies]
 ratatui = "0.29"
@@ -16,3 +18,8 @@ anyhow = "1"
 dirs = "5"
 rss = "2.0"
 chrono = "0.4"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
