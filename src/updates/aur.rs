@@ -1,4 +1,5 @@
 use super::types::{Package, PackageSource};
+use super::util::url_encode;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::process::Command;
@@ -19,18 +20,19 @@ struct AurPackage {
     version: String,
 }
 
-pub fn check_aur_updates(aur_helper: &str) -> Vec<Package> {
+pub fn check_aur_updates(aur_helper: &str) -> Result<Vec<Package>, String> {
     let local_packages = get_local_aur_packages();
     if local_packages.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Try AUR API first
     match query_aur_api(&local_packages) {
-        Ok(aur_versions) => find_updates(&local_packages, &aur_versions),
-        Err(_) => {
+        Ok(aur_versions) => Ok(find_updates(&local_packages, &aur_versions)),
+        Err(api_err) => {
             // Fall back to configured AUR helper
             check_aur_updates_fallback(aur_helper)
+                .map_err(|helper_err| format!("{}; {}", api_err, helper_err))
         }
     }
 }
@@ -61,18 +63,29 @@ fn get_local_aur_packages() -> Vec<(String, String)> {
         .collect()
 }
 
-fn query_aur_api(packages: &[(String, String)]) -> Result<HashMap<String, String>, reqwest::Error> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-
+fn query_aur_api(packages: &[(String, String)]) -> Result<HashMap<String, String>, String> {
     let mut results = HashMap::new();
 
     for batch in packages.chunks(BATCH_SIZE) {
-        let names: Vec<&str> = batch.iter().map(|(name, _)| name.as_str()).collect();
-        let params: Vec<(&str, &str)> = names.iter().map(|n| ("arg[]", *n)).collect();
+        let args: Vec<String> = batch
+            .iter()
+            .map(|(name, _)| format!("arg[]={}", url_encode(name)))
+            .collect();
+        let url = format!("{}?{}", AUR_API_URL, args.join("&"));
 
-        let response: AurResponse = client.get(AUR_API_URL).query(&params).send()?.json()?;
+        // -g disables curl URL globbing so the arg[] brackets pass through literally
+        let output = Command::new("curl")
+            .args(["-sg", "-m", "30", &url])
+            .output()
+            .map_err(|e| format!("failed to run curl: {}", e))?;
+
+        if !output.status.success() {
+            return Err(format!("AUR request failed (curl {})", output.status));
+        }
+
+        let json = String::from_utf8_lossy(&output.stdout);
+        let response: AurResponse =
+            serde_json::from_str(&json).map_err(|e| format!("unexpected AUR response: {}", e))?;
 
         for pkg in response.results {
             results.insert(pkg.name, pkg.version);
@@ -120,20 +133,19 @@ fn is_newer(new: &str, old: &str) -> bool {
     }
 }
 
-fn check_aur_updates_fallback(aur_helper: &str) -> Vec<Package> {
-    let output = Command::new(aur_helper).arg("-Qua").output();
+fn check_aur_updates_fallback(aur_helper: &str) -> Result<Vec<Package>, String> {
+    let output = Command::new(aur_helper).arg("-Qua").output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("{} not found", aur_helper)
+        } else {
+            format!("failed to run {}: {}", aur_helper, e)
+        }
+    })?;
 
-    let output = match output {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
-    };
-
-    if !output.status.success() && output.stdout.is_empty() {
-        return Vec::new();
-    }
-
+    // AUR helpers exit non-zero with empty output when there are no updates,
+    // so parse whatever stdout we got rather than treating that as an error
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
+    let packages = stdout
         .lines()
         .filter_map(|line| {
             if !line.contains(" -> ") {
@@ -150,5 +162,7 @@ fn check_aur_updates_fallback(aur_helper: &str) -> Vec<Package> {
                 None
             }
         })
-        .collect()
+        .collect();
+
+    Ok(packages)
 }

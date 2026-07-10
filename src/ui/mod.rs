@@ -13,10 +13,11 @@ use ratatui::{
 };
 
 fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if s.chars().count() <= max_len {
         format!("{:<width$}", s, width = max_len)
     } else {
-        format!("{:<width$}", format!("{}...", &s[..max_len.saturating_sub(3)]), width = max_len)
+        let truncated: String = s.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{:<width$}", format!("{}...", truncated), width = max_len)
     }
 }
 
@@ -173,12 +174,14 @@ fn draw_info_pane(frame: &mut Frame, info: Option<&PackageInfo>, area: Rect) {
 
 fn format_package_name(name: &str, source_label: &str, total_width: usize) -> String {
     let combined = format!("{}{}", name, source_label);
-    if combined.len() <= total_width {
+    if combined.chars().count() <= total_width {
         format!("{:<width$}", combined, width = total_width)
     } else {
         // Truncate name, preserve source label
-        let available_for_name = total_width.saturating_sub(source_label.len()).saturating_sub(3);
-        let truncated_name = &name[..available_for_name.min(name.len())];
+        let available_for_name = total_width
+            .saturating_sub(source_label.chars().count())
+            .saturating_sub(3);
+        let truncated_name: String = name.chars().take(available_for_name).collect();
         format!("{:<width$}", format!("{}...{}", truncated_name, source_label), width = total_width)
     }
 }
@@ -249,7 +252,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let orph_style = if orph > 0 { styles::warning() } else { styles::status_active() };
     let rebuild_style = if rebuild > 0 { styles::error() } else { styles::status_active() };
 
-    let status = if width >= 100 {
+    let mut status = if width >= 100 {
         // Wide: full labels
         let loading_indicator = if loading { " [loading...]" } else { "" };
         Line::from(vec![
@@ -308,6 +311,17 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(loading_indicator, styles::warning()),
         ])
     };
+
+    if app.update_error.is_some() {
+        let label = if width >= 100 {
+            " [update check failed]"
+        } else if width >= 60 {
+            " [check failed]"
+        } else {
+            " !"
+        };
+        status.spans.push(Span::styled(label, styles::error()));
+    }
 
     let paragraph = Paragraph::new(status);
     frame.render_widget(paragraph, area);
@@ -373,11 +387,13 @@ fn draw_updates(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if app.packages.is_empty() {
         let message = if app.loading == LoadingState::Loading {
-            "Checking for updates..."
+            "Checking for updates...".to_string()
+        } else if let Some(err) = &app.update_error {
+            format!("Update check failed: {}\nPress r to retry", err)
         } else {
-            "No updates available"
+            "No updates available".to_string()
         };
-        draw_empty_state(frame, " Packages ", message, is_active, list_area);
+        draw_empty_state(frame, " Packages ", &message, is_active, list_area);
         return;
     }
 
@@ -1127,7 +1143,7 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" Install", styles::help()),
                 Span::styled(" | ", styles::help()),
                 Span::styled("Esc", styles::help_key()),
-                Span::styled(" Clear", styles::help()),
+                Span::styled(" Clear/Quit", styles::help()),
             ]),
             Line::from(vec![
                 Span::styled("Space", styles::help_key()),
@@ -1135,9 +1151,6 @@ fn draw_help(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" | ", styles::help()),
                 Span::styled("?", styles::help_key()),
                 Span::styled(" Info", styles::help()),
-                Span::styled(" | ", styles::help()),
-                Span::styled("q", styles::help_key()),
-                Span::styled(" Quit", styles::help()),
             ]),
         ),
         Tab::News => (

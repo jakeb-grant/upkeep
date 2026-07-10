@@ -1,22 +1,35 @@
 use super::types::{Package, PackageSource};
 use std::process::Command;
 
-pub fn check_pacman_updates() -> Vec<Package> {
+pub fn check_pacman_updates() -> Result<Vec<Package>, String> {
     let output = Command::new("checkupdates")
         .arg("--nocolor")
-        .output();
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "checkupdates not found (install pacman-contrib)".to_string()
+            } else {
+                format!("failed to run checkupdates: {}", e)
+            }
+        })?;
 
-    let output = match output {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
-    };
-
-    if !output.status.success() && output.stdout.is_empty() {
-        return Vec::new();
+    // checkupdates exit codes: 0 = updates available, 2 = no updates, 1 = error
+    match output.status.code() {
+        Some(0) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(parse_updates(&stdout))
+        }
+        Some(2) => Ok(Vec::new()),
+        _ => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let msg = stderr.lines().next().unwrap_or("").trim().to_string();
+            if msg.is_empty() {
+                Err("checkupdates failed".to_string())
+            } else {
+                Err(msg)
+            }
+        }
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_updates(&stdout)
 }
 
 fn parse_updates(output: &str) -> Vec<Package> {

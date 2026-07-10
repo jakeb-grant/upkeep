@@ -56,6 +56,7 @@ pub struct App {
     pub config: Config,
     pub tab: Tab,
     pub packages: Vec<Package>,
+    pub update_error: Option<String>,
     pub installed_packages: Vec<InstalledPackage>,
     pub orphan_packages: Vec<InstalledPackage>,
     pub rebuild_issues: Vec<RebuildIssue>,
@@ -94,7 +95,7 @@ pub struct App {
 }
 
 enum TaskResult {
-    Updates(Vec<Package>, Vec<Package>),
+    Updates(Result<Vec<Package>, String>, Result<Vec<Package>, String>), // (pacman, aur)
     Installed(Vec<InstalledPackage>),
     Orphans(Vec<InstalledPackage>),
     Rebuilds(Vec<RebuildIssue>),
@@ -113,6 +114,7 @@ impl App {
             config,
             tab: Tab::Updates,
             packages: Vec::new(),
+            update_error: None,
             installed_packages: Vec::new(),
             orphan_packages: Vec::new(),
             rebuild_issues: Vec::new(),
@@ -239,8 +241,23 @@ impl App {
             match result {
                 TaskResult::Updates(pacman, aur) => {
                     self.pending_tasks = self.pending_tasks.saturating_sub(1);
-                    self.packages = pacman;
-                    self.packages.extend(aur);
+                    let mut errors = Vec::new();
+                    self.packages = match pacman {
+                        Ok(pkgs) => pkgs,
+                        Err(e) => {
+                            errors.push(format!("pacman: {}", e));
+                            Vec::new()
+                        }
+                    };
+                    match aur {
+                        Ok(pkgs) => self.packages.extend(pkgs),
+                        Err(e) => errors.push(format!("AUR: {}", e)),
+                    }
+                    self.update_error = if errors.is_empty() {
+                        None
+                    } else {
+                        Some(errors.join("; "))
+                    };
                     self.clamp_list_selection();
                     if self.show_info_pane && self.tab == Tab::Updates {
                         self.refresh_package_info();

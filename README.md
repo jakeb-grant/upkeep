@@ -50,6 +50,8 @@ sudo cp target/release/upkeep /usr/local/bin/
 ### Dependencies
 
 - An AUR helper (`yay` by default, configurable)
+- `pacman-contrib` — provides `checkupdates` (update checking) and `paccache` (cache cleanup)
+- `wl-clipboard` or `xclip` (optional) — clipboard export of package lists
 
 ## Usage
 
